@@ -30,3 +30,7 @@ Het formaat volgt [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/) en de
 - Opzoeken van TLSA/DANE-records met `dig`, met DNSSEC-validatie via `delv`.
 - Poortontdekking met nmap (`--discover`) of een bestaande nmap-XML (`--nmap-xml`), inclusief automatische STARTTLS-detectie.
 - Uitvoer per dienst als Markdown-checklist en als JSON, plus `overzicht.md` bij meerdere diensten.
+
+[Unreleased]: https://github.com/mothproof3512/ncsc-tls-check/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/mothproof3512/ncsc-tls-check/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/mothproof3512/ncsc-tls-check/releases/tag/v1.0.0
