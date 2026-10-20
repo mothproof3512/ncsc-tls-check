@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+
+# Scanresultaten bevatten klantdata: nooit committen
+*_ncsc.md
+*_ncsc.json
+*_testssl.json
+*_testssl.log
+*_nmap.xml
+overzicht.md
+resultaten/
+results/
