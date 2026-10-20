@@ -9,6 +9,15 @@ Het formaat volgt [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/) en de
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-20
+
+### Toegevoegd
+- Elk checklistpunt verwijst naar de passage in de richtlijn: paragraaf, tabel, paginanummer en de kern van de regel. De verwijzing staat in de console-uitvoer (bij bevindingen, adviezen en navraagpunten), in de checklist, in de bevindingentabel en in de JSON (`references`).
+- Bevindingen op niveau *uit te faseren* verwijzen ook naar §3.2 (p. 16): de eis van een uitfaseerplan met meetbare criteria.
+
+### Gewijzigd
+- De DHE-bevinding maakt nu onderscheid tussen DHE-cipher suites in TLS 1.2 en finite-field-groepen die de server in TLS 1.3 accepteert. In het tweede geval staat erbij waar je dat aanpast.
+
 ## [1.0.0] - 2026-10-20
 
 ### Toegevoegd

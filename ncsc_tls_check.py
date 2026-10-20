@@ -26,7 +26,7 @@ import subprocess
 import sys
 import tempfile
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 GUIDELINE = "NCSC Transport Layer Security (TLS) - Beveiligingsrichtlijnen versie 2025-05"
 
 # --------------------------------------------------------------------------------------
@@ -46,6 +46,163 @@ INFO = "info"
 
 STATUS_LABEL = {PASS: "OK", FAIL: "BEVINDING", ADVICE: "ADVIES", MANUAL: "NAVRAAG",
                 UNKNOWN: "ONBEKEND", INFO: "INFO"}
+
+
+# --------------------------------------------------------------------------------------
+# Verwijzingen naar de richtlijn: (passage, pagina('s), kern van de regel in eigen woorden)
+# Paginanummers zijn de gedrukte nummers (gelijk aan de PDF-pagina) van versie 2025-05.
+# --------------------------------------------------------------------------------------
+REFS = {
+    "inventory": ("Hoofdstuk 2 Stappenplan, stap 1 en 4", "13-14",
+                  "Inventariseer de servers en clients en controleer de configuratie met tools."),
+    "versions": ("§3.3.1 Versies, Tabel 1", "17",
+                 "TLS 1.3 = goed, TLS 1.2 = voldoende; TLS 1.1, TLS 1.0 en alle SSL-versies = onvoldoende."),
+    "downgrade": ("§3.3.1 Versies", "17",
+                  "Alleen TLS 1.3 en TLS 1.2 zijn veilig in gebruik. Downgradebescherming is geen expliciete eis; "
+                  "dit is een aanvullende controle."),
+    "auth": ("§3.3.2 Authenticatie, Tabel 2", "17",
+             "Authenticatie met X.509-certificaten. ECDSA, RSA (RSA-PSS) en EdDSA = voldoende; DSS, EXPORT, PSK, "
+             "anon, NULL en KRB5 = onvoldoende."),
+    "cert_key": ("§3.3.2.1 Veilige parameters, Tabel 3, 4 en 5", "18-19",
+                 "RSA: minimaal 3072 bit = voldoende, 2048-3071 bit = uit te faseren, < 2048 bit = onvoldoende. "
+                 "ECDSA alleen op de curves uit Tabel 3; EdDSA op Ed25519 of Ed448."),
+    "sigalg13": ("§3.3.2.1 Veilige parameters, Tabel 4", "18",
+                 "Het padding-schema RSA-PSS = voldoende; RSA-PKCS#1 v1.5 = onvoldoende."),
+    "sigalg12": ("§3.3.2.1 Veilige parameters, Tabel 4 (padding) en §3.3.5 Tabel 9 (hash)", "18, 21",
+                 "RSA-PKCS#1 v1.5 = onvoldoende: update de bibliotheek naar een versie met RSA-PSS of gebruik geen "
+                 "RSA voor TLS-authenticatie. SHA-1 = onvoldoende, SHA-224 = uit te faseren."),
+    "hash": ("§3.3.5 Hashfuncties voor TLS, Tabel 9", "21",
+             "SHA-512, SHA-384 en SHA-256 = goed; SHA-224 = uit te faseren; SHA-1 en MD5 = onvoldoende."),
+    "chain": ("Hoofdstuk 2 stap 3 en §4.4 Certificaten", "14, 25",
+              "Configureer naast het servercertificaat ook de intermediate-certificaten naar de root-CA; "
+              "adequaat certificaatbeheer is een randvoorwaarde."),
+    "cert_valid": ("§1.2.2.1 Authenticatie en §4.4 Certificaten", "8, 25",
+                   "De controlerende partij controleert of het certificaat geldig en niet herroepen is; "
+                   "certificaatbeheer valt onder de randvoorwaarden."),
+    "ocsp": ("§3.4.5 Certificaatstatuscontrole", "23",
+             "Configureer OCSP-stapling als dat mogelijk is; sommige CA's ondersteunen geen OCSP."),
+    "dane": ("Hoofdstuk 2 stap 3 (Configuratie)", "14",
+             "Overweeg TLSA-records ter ondersteuning van het DANE-protocol."),
+    "kx": ("§3.3.3 Sleuteluitwisseling, Tabel 6", "19",
+           "Gebruik sleuteluitwisseling met forward secrecy (kortstondige sleutels). ECDHE = voldoende, "
+           "DHE = uit te faseren; RSA, DH, ECDH, KRB5, NULL, PSK en SRP = onvoldoende."),
+    "pq_kx": ("§3.3.3 Sleuteluitwisseling, Tabel 6, en §4.5 Quantumveiligheid", "19, 25-26",
+              "X25519MLKEM768, SecP256r1MLKEM768 en SecP384r1MLKEM1024 = goed. Overweeg X25519MLKEM768 nu al "
+              "te configureren tegen de quantumdreiging."),
+    "curves": ("§3.3.3.1 Veilige parameters, met Tabel 3", "18, 20",
+               "ECDHE: secp256r1/384r1/521r1, X25519, X448 en brainpool = voldoende; secp224r1 = uit te faseren; "
+               "andere curves = onvoldoende."),
+    "dhe": ("§3.3.3 Tabel 6 en §3.3.3.1 Veilige parameters, Tabel 7", "19-20",
+            "DHE is uit te faseren. Tot de uitfasering: ffdhe3072 of groter (uit te faseren); "
+            "ffdhe2048 = onvoldoende."),
+    "large_ch": ("§4.5 Quantumveiligheid, stap 2", "25",
+                 "Quantumveilige cryptografie vraagt grotere ClientHello-berichten; onderzoek of de server daar "
+                 "beperkingen in heeft (zie tldr.fail)."),
+    "bulk_weak": ("§3.3.4 Algoritmes voor bulkversleuteling, Tabel 8", "20",
+                  "3DES, SEED, IDEA, DES, RC4 en NULL = onvoldoende."),
+    "ccm8": ("§3.3.4 Algoritmes voor bulkversleuteling, Tabel 8 (voetnoot †)", "20",
+             "AES-CCM_8 heeft een ingekorte authenticatietag (64 bit integriteit) en is daarom onvoldoende."),
+    "cbc": ("§3.3.4 Algoritmes voor bulkversleuteling, Tabel 8 en toelichting", "20-21",
+            "Gebruik AEAD-algoritmes. AES in CBC-modus = uit te faseren: het vereist encrypt-then-MAC, dat beperkt "
+            "ondersteund en niet afdwingbaar is."),
+    "camellia": ("§3.3.4 toelichting bij Tabel 8", "21",
+                 "CAMELLIA en ARIA = uit te faseren; gebruik ze niet tenzij er een overtuigende "
+                 "interoperabiliteitsreden is."),
+    "server_order": ("Hoofdstuk 2 stap 3 (Configuratie)", "14",
+                     "Configureer de server zo dat deze de voorkeur geeft aan de instellingen die de veiligste "
+                     "verbinding opleveren."),
+    "suites": ("Bijlage B Lijst met cipher suites, met §3.3.4 Tabel 8", "29-30",
+               "Het niveau van een cipher suite is zo laag als het laagst gewaardeerde algoritme erin."),
+    "compression": ("§3.4.1 Compressie, Tabel 10", "21",
+                    "Gebruik geen TLS-compressie (kwetsbaar voor CRIME); TLS 1.2 met compressie = onvoldoende."),
+    "breach": ("§3.4.1 Compressie", "22",
+               "Compressie op applicatieniveau kan een BREACH-aanval mogelijk maken; onderzoek of de toepassing "
+               "kwetsbaar is voordat je compressie toepast."),
+    "reneg_secure": ("§3.4.2 Renegotiation, Tabel 11", "22",
+                     "Geen insecure renegotiation: controleer dat de fix uit RFC 5746 is geïmplementeerd."),
+    "reneg_client": ("§3.4.2 Renegotiation, Tabel 11", "22",
+                     "Client-initiated renegotiation uit = goed; gelimiteerd = voldoende; onbeperkt = uit te faseren."),
+    "resumption": ("§3.4.3 Sessies hervatten, Tabel 12", "22",
+                   "TLS 1.3-sessietickets = goed. TLS 1.2-tickets of sessie-ID's alleen voldoende met aanvullende "
+                   "bescherming van de sleutel of opslag en regelmatige vervanging; anders onvoldoende."),
+    "0rtt": ("§3.4.4 Sessies hervatten (0-RTT), Tabel 13", "23",
+             "Schakel 0-RTT standaard uit (replay-aanvallen); in toepassing-agnostische context is 0-RTT onvoldoende."),
+    "ems": ("§4.1 TLS-bibliotheken", "24",
+            "De bibliotheek moet de maatregelen uit RFC 7627 (extended_master_secret) en RFC 5746 hebben."),
+    "etm": ("§3.3.4 toelichting bij Tabel 8 en Bijlage A", "21, 27",
+            "AES in CBC-modus vereist de encrypt-then-MAC-extensie (RFC 7366) aan client- en serverkant."),
+    "minimal": ("§4.1 TLS-bibliotheken", "24",
+                "Gebruik uitsluitend instellingen die voor de toepassing noodzakelijk zijn."),
+    "lib_vulns": ("§4.1 TLS-bibliotheken (en §1.4.1)", "24, 11",
+                  "Kies een betrouwbare, goed onderhouden bibliotheek en gebruik altijd de meest recente versie; "
+                  "ook bibliotheken bevatten kwetsbaarheden."),
+    "lib": ("§4.1 TLS-bibliotheken", "24",
+            "Weet welke bibliotheek de serversoftware gebruikt en zorg dat die up-to-date is."),
+    "prng": ("§4.2 Toevalsgetallen", "24",
+             "Controleer of de PRNG van de bibliotheek onvoorspelbare toevalsgetallen levert; Dual EC DRBG is onveilig."),
+    "proxy": ("§4.3 TLS proxy", "25",
+              "Geef geheime sleutels niet zomaar aan een derde; breng de risico's in kaart en neem contractuele "
+              "maatregelen."),
+    "certmgmt": ("§4.4 Certificaten", "25",
+                 "Adequaat certificaatbeheer is een belangrijke voorwaarde voor veilig gebruik van TLS."),
+    "pq_tls13": ("§4.5 Quantumveiligheid, stap 1", "25",
+                 "Ondersteun zo snel mogelijk TLS 1.3; quantumveilige algoritmes komen naar verwachting alleen daarvoor."),
+    "pq_risk": ("§4.5 Quantumveiligheid, stap 6", "25-26",
+                "Voer een risicoanalyse uit; bij significante risico's nu al een hybride sleuteluitwisseling "
+                "implementeren."),
+    "pq_256": ("§4.5 Quantumveiligheid, stap 3", "25",
+               "Gebruik hashing en bulkversleuteling met 256-bit cryptografische sterkte."),
+    "pq_agility": ("§4.5 Quantumveiligheid, stap 4 en 5", "25",
+                   "Weet waar de organisatie TLS gebruikt en zorg dat algoritmes makkelijk te vervangen zijn."),
+    "phaseout": ("§3.2 Richtlijn voor een veilige TLS-configuratie", "16",
+                 "Gebruik uit te faseren instellingen alleen waar nodig voor interoperabiliteit, met meetbare "
+                 "uitfaseercriteria die de verantwoordelijke bekrachtigt."),
+}
+
+
+# Vangnet: checklistpunt (begin van de titel) -> verwijzing, voor punten zonder expliciete ref
+TITLE_REFS = [
+    ("testssl.sh-scan", "inventory"), ("Alle (STARTTLS-)poorten", "inventory"), ("OpenSSL-versie", "inventory"),
+    ("TLS 1.3 wordt", "versions"), ("TLS 1.2 alleen", "versions"), ("TLS 1.1 en TLS 1.0", "versions"),
+    ("SSL 3.0", "versions"), ("Geen downgrade", "downgrade"),
+    ("Authenticatie met X.509", "auth"), ("Sleutel servercertificaat", "cert_key"),
+    ("Handtekeningalgoritmes TLS 1.3", "sigalg13"), ("Handtekeningalgoritmes TLS 1.2", "sigalg12"),
+    ("Hash in handtekening", "hash"), ("Volledige en geldige certificaatketen", "chain"),
+    ("Certificaat geldig", "cert_valid"), ("OCSP-stapling", "ocsp"), ("TLSA-records", "dane"),
+    ("Alle cipher suites bieden forward secrecy", "kx"), ("Hybride post-quantum", "pq_kx"),
+    ("ECDHE-curves", "curves"), ("Geen DHE", "dhe"), ("Server verwerkt grote ClientHello", "large_ch"),
+    ("Geen RC4", "bulk_weak"), ("Geen AES-CCM_8", "ccm8"), ("Alleen AEAD", "cbc"),
+    ("Geen suites met SHA-1", "hash"), ("Geen CAMELLIA", "camellia"), ("Servervoorkeur", "server_order"),
+    ("Cipher suites", "suites"), ("TLS-compressie", "compression"), ("HTTP-compressie", "breach"),
+    ("Secure renegotiation", "reneg_secure"), ("Client-initiated renegotiation", "reneg_client"),
+    ("Renegotiation", "reneg_client"), ("Sessiehervatting", "resumption"), ("0-RTT", "0rtt"),
+    ("Extended Master Secret", "ems"), ("Encrypt-then-MAC", "etm"), ("Geen onnodige functionaliteit", "minimal"),
+    ("Geen bekende implementatiekwetsbaarheden", "lib_vulns"), ("TLS-bibliotheek en versie", "lib"),
+    ("Cryptografisch veilige PRNG", "prng"), ("TLS-proxy", "proxy"), ("Certificaatbeheer", "certmgmt"),
+    ("TLS 1.3 beschikbaar", "pq_tls13"), ("Hybride sleuteluitwisseling of risicoanalyse", "pq_risk"),
+    ("Bulkversleuteling en hashing met 256-bit", "pq_256"), ("Crypto-agility", "pq_agility"),
+]
+
+
+def title_ref(title):
+    for prefix, key in TITLE_REFS:
+        if title.startswith(prefix):
+            return key
+    return ""
+
+
+def ref_label(key):
+    """'§3.3.4 ..., Tabel 8 (p. 20)' of de ruwe tekst als de sleutel onbekend is."""
+    if not key:
+        return ""
+    if key in REFS:
+        sec, pages, _ = REFS[key]
+        return f"{sec} (p. {pages})"
+    return key
+
+
+def ref_rule(key):
+    return REFS[key][2] if key in REFS else ""
 
 
 def worst(levels):
@@ -446,10 +603,18 @@ class Checklist:
         self.items = []
 
     def add(self, section, title, status, level=None, evidence="", advice="", ref=""):
+        ref = ref or title_ref(title)
+        refs = [ref] if ref else []
+        # uit te faseren -> ook verwijzen naar de eis van een uitfaseerplan (§3.2)
+        if status == FAIL and level == UIT_TE_FASEREN:
+            refs.append("phaseout")
         self.items.append({"section": section, "title": title, "status": status,
                            "level": LEVEL_NAME[level] if level in LEVEL_NAME else level,
                            "level_num": level if isinstance(level, int) else None,
-                           "evidence": evidence, "advice": advice, "ref": ref})
+                           "evidence": evidence, "advice": advice, "ref": ref,
+                           "references": [{"key": r, "passage": REFS[r][0] if r in REFS else r,
+                                           "pages": REFS[r][1] if r in REFS else "",
+                                           "rule": ref_rule(r)} for r in refs]})
 
     def leveled(self, section, title, level, evidence="", advice="", ref=""):
         self.add(section, title, status_for(level), level, evidence,
@@ -490,23 +655,23 @@ def assess(f, ctx):
     if t13 is None:
         P("versions", "TLS 1.3 wordt ondersteund", UNKNOWN, None, "niet getest")
     elif t13:
-        cl.leveled("versions", "TLS 1.3 wordt ondersteund", GOED, f"TLS 1.3: {f.finding('TLS1_3')}", "", "§3.3.1 Tabel 1")
+        cl.leveled("versions", "TLS 1.3 wordt ondersteund", GOED, f"TLS 1.3: {f.finding('TLS1_3')}", "", "versions")
     else:
         # TLS 1.3 heeft de voorkeur, maar alleen TLS 1.2 is nog 'voldoende' (Tabel 1)
         P("versions", "TLS 1.3 wordt ondersteund", ADVICE, VOLDOENDE, f"TLS 1.3: {f.finding('TLS1_3')}",
-          "Schakel TLS 1.3 in: voorkeursversie en voorwaarde voor de PQ-migratie (§3.3.1, §4.5).", "§3.3.1 Tabel 1")
+          "Schakel TLS 1.3 in: voorkeursversie en voorwaarde voor de PQ-migratie (§3.3.1, §4.5).", "versions")
     t12 = proto.get("TLS1_2")
     P("versions", "TLS 1.2 alleen als nodig voor oudere clients", PASS,
       VOLDOENDE if t12 else None, f"TLS 1.2: {f.finding('TLS1_2', 'niet getest')}",
-      "TLS 1.2 is voldoende; leg vast welke clients het nog nodig hebben." if t12 else "", "§3.3.1 Tabel 1")
+      "TLS 1.2 is voldoende; leg vast welke clients het nog nodig hebben." if t12 else "", "versions")
     old = [lbl for pid, lbl in (("TLS1_1", "TLS 1.1"), ("TLS1", "TLS 1.0")) if proto.get(pid)]
     cl.leveled("versions", "TLS 1.1 en TLS 1.0 uitgeschakeld", ONVOLDOENDE if old else GOED,
                ("aangeboden: " + ", ".join(old)) if old else "niet aangeboden",
-               "Schakel TLS 1.0 en 1.1 uit (onvoldoende sinds deze versie van de richtlijn).", "§3.3.1 Tabel 1")
+               "Schakel TLS 1.0 en 1.1 uit (onvoldoende sinds deze versie van de richtlijn).", "versions")
     ssl = [lbl for pid, lbl in (("SSLv3", "SSL 3.0"), ("SSLv2", "SSL 2.0")) if proto.get(pid)]
     cl.leveled("versions", "SSL 3.0, SSL 2.0 en SSL 1.0 uitgeschakeld", ONVOLDOENDE if ssl else GOED,
                ("aangeboden: " + ", ".join(ssl)) if ssl else "niet aangeboden",
-               "Schakel alle SSL-versies uit.", "§3.3.1 Tabel 1")
+               "Schakel alle SSL-versies uit.", "versions")
     fb = f.get("fallback_SCSV")
     if fb:
         bad =fb.get("severity") in ("MEDIUM", "HIGH", "CRITICAL")
@@ -543,7 +708,7 @@ def assess(f, ctx):
                    ONVOLDOENDE if (anon or anon_flag) else VOLDOENDE,
                    ("anonieme suites: " + ", ".join(anon)) if anon else
                    ("aNULL aangeboden" if anon_flag else "geen anonieme suites aangeboden"),
-                   "Verwijder alle aNULL/anon-suites.", "§3.3.2 Tabel 2")
+                   "Verwijder alle aNULL/anon-suites.", "auth")
 
     key_items = f.startswith("cert_keySize")
     if key_items:
@@ -552,12 +717,12 @@ def assess(f, ctx):
             tag = it["id"].replace("cert_keySize", "").strip()
             cl.leveled("cert", f"Sleutel servercertificaat {tag}".strip(), lv, f"{desc} ({it['finding']})",
                        "Gebruik RSA >= 3072 bit, ECDSA op P-256/P-384/P-521 of Ed25519/Ed448.",
-                       "§3.3.2.1 Tabel 3-5")
+                       "cert_key")
     else:
         P("cert", "Sleutel servercertificaat", UNKNOWN, None, "cert_keySize ontbreekt in testssl-uitvoer")
 
-    for pid, label, ref in (("FS_TLS13_sig_algs", "TLS 1.3", "§3.3.2.1 Tabel 4"),
-                            ("FS_TLS12_sig_algs", "TLS 1.2", "§3.3.2.1 Tabel 4, Tabel 9")):
+    for pid, label, ref in (("FS_TLS13_sig_algs", "TLS 1.3", "sigalg13"),
+                            ("FS_TLS12_sig_algs", "TLS 1.2", "sigalg12")):
         fd = f.finding(pid)
         if fd is None:
             if proto.get("TLS1_3" if label == "TLS 1.3" else "TLS1_2"):
@@ -580,7 +745,7 @@ def assess(f, ctx):
             h = "SHA1" if m.group(0).upper().replace("-", "") in ("SHA1",) else ("SHA" + m.group(1) if m.group(1) else m.group(0).upper())
         lv = HASH_LEVEL.get(h) if h else None
         cl.leveled("cert", "Hash in handtekening van het certificaat >= SHA-256", lv, it["finding"],
-                   "Laat het certificaat opnieuw uitgeven met SHA-256 of sterker.", "§3.3.5 Tabel 9")
+                   "Laat het certificaat opnieuw uitgeven met SHA-256 of sterker.", "hash")
 
     chain = f.get("cert_chain_of_trust")
     if chain:
@@ -611,11 +776,11 @@ def assess(f, ctx):
               f"{stap}; certificaat bevat geen OCSP-URI, dus stapling niet mogelijk (CA gebruikt alleen CRL)")
         else:
             P("cert", "OCSP-stapling geconfigureerd", ADVICE, None, f"{stap}; OCSP-URI: {ocsp_url}",
-              "Schakel OCSP-stapling in (aanbeveling §3.4.5).", "§3.4.5")
+              "Schakel OCSP-stapling in (aanbeveling §3.4.5).", "ocsp")
     tlsa_ok, tlsa_txt = ctx.get("tlsa", (None, "niet getest"))
     P("cert", "TLSA-records voor DANE (optioneel)",
       PASS if tlsa_ok else ((INFO if "n.v.t." in tlsa_txt else UNKNOWN) if tlsa_ok is None else ADVICE),
-      None, tlsa_txt, "" if tlsa_ok else "Overweeg DANE/TLSA, vooral voor mailservers.", "Hoofdstuk 2, stap 3")
+      None, tlsa_txt, "" if tlsa_ok else "Overweeg DANE/TLSA, vooral voor mailservers.", "dane")
 
     # ---------------------------------------------------------------- sleuteluitwisseling (Tabel 3, 6, 7)
     if have_cipher_data:
@@ -623,7 +788,7 @@ def assess(f, ctx):
         cl.leveled("kx", "Alle cipher suites bieden forward secrecy (geen statische RSA/DH/ECDH, PSK, SRP, KRB5)",
                    ONVOLDOENDE if nofs else VOLDOENDE,
                    ("zonder forward secrecy: " + ", ".join(nofs)) if nofs else "alle suites gebruiken (EC)DHE",
-                   "Verwijder alle suites zonder ephemeral sleuteluitwisseling.", "§3.3.3 Tabel 6")
+                   "Verwijder alle suites zonder ephemeral sleuteluitwisseling.", "kx")
     else:
         P("kx", "Alle cipher suites bieden forward secrecy", UNKNOWN, None, "geen cipherlijst in testssl-uitvoer")
 
@@ -644,7 +809,7 @@ def assess(f, ctx):
         P("kx", "Hybride post-quantum sleuteluitwisseling (X25519MLKEM768 e.a.)",
           PASS if pq_found else ADVICE, GOED if pq_found else VOLDOENDE, ev.strip(" |"),
           "" if pq_found else "Niet verplicht; zonder hybride KEM is het hoogst haalbare niveau 'voldoende'. "
-                              "Overweeg X25519MLKEM768 (store-now-decrypt-later).", "§3.3.3, §4.5")
+                              "Overweeg X25519MLKEM768 (store-now-decrypt-later).", "pq_kx")
 
     curves = f.finding("FS_ECDHE_curves")
     if curves is not None and curves.strip() and "not" not in curves.lower()[:4]:
@@ -653,7 +818,7 @@ def assess(f, ctx):
         lv = worst([r[1] for r in rated])
         bad = [f"{c} ({LEVEL_NAME[l]})" for c, l in rated if l < VOLDOENDE]
         cl.leveled("kx", "ECDHE-curves", lv, "aangeboden: " + curves + (("  |  probleem: " + ", ".join(bad)) if bad else ""),
-                   "Beperk tot secp256r1/384r1/521r1, X25519, X448 (of brainpool).", "§3.3.3.1 Tabel 3")
+                   "Beperk tot secp256r1/384r1/521r1, X25519, X448 (of brainpool).", "curves")
     elif any(s[2]["kx"] == "ECDHE" for s in tls12_suites) or proto.get("TLS1_3"):
         P("kx", "ECDHE-curves", UNKNOWN, None, "FS_ECDHE_curves ontbreekt in testssl-uitvoer")
 
@@ -671,24 +836,28 @@ def assess(f, ctx):
             notes.append("DH-grootte: " + ", ".join(f"{b} bit" for b in dh_bits))
         if ffdhe:
             levels += [FFDHE_LEVEL.get(g, ONVOLDOENDE) for g in ffdhe]
-            notes.append("finite field groups (o.a. TLS 1.3): " + " ".join(ffdhe))
+            notes.append(("server accepteert finite-field DHE-groepen (ook in TLS 1.3, via supported_groups): "
+                          if not dhe_suites else "finite field groups: ") + " ".join(ffdhe))
+            if not dhe_suites:
+                notes.append("geen DHE-cipher suites in TLS 1.2; verwijder de ffdhe-groepen uit de "
+                             "groups-configuratie (bv. OpenSSL Groups / nginx ssl_ecdh_curve)")
         if dh_groups and not ffdhe:
             notes.append(f"DH-groep: {dh_groups}")
             if "RFC7919" not in dh_groups and "ffdhe" not in dh_groups:
                 notes.append("let op: geen RFC 7919-groep (Tabel 7 noemt alleen ffdhe-groepen)")
         cl.leveled("kx", "Geen DHE (uit te faseren); zo ja, groep >= 3072 bit", worst(levels), " | ".join(notes),
                    "Faseer DHE uit (DHE = uit te faseren, ffdhe2048/<= 2048 bit = onvoldoende); stel een "
-                   "uitfaseerplan op met meetbare criteria.", "§3.3.3.1 Tabel 6, Tabel 7")
+                   "uitfaseerplan op met meetbare criteria.", "dhe")
     elif have_cipher_data:
         P("kx", "Geen DHE (uit te faseren)", PASS, None, "geen DHE aangeboden")
 
     lch = ctx.get("large_ch")
     if lch is None:
         P("kx", "Server verwerkt grote ClientHello (PQ key share)", UNKNOWN, None,
-          "niet getest (OpenSSL 3.5+ nodig of --no-probes)", "", "§4.5 stap 2")
+          "niet getest (OpenSSL 3.5+ nodig of --no-probes)", "", "large_ch")
     else:
         P("kx", "Server verwerkt grote ClientHello (PQ key share)", PASS if lch[0] else FAIL, None, lch[1],
-          "" if lch[0] else "Server faalt op grote ClientHello; zie https://tldr.fail", "§4.5 stap 2")
+          "" if lch[0] else "Server faalt op grote ClientHello; zie https://tldr.fail", "large_ch")
 
     # ---------------------------------------------------------------- bulk en hash (Tabel 8, 9, Bijlage B)
     if have_cipher_data:
@@ -697,28 +866,28 @@ def assess(f, ctx):
         weak = names(lambda c: c["levels"].get("bulk") == ONVOLDOENDE and not c["enc"].upper().endswith("CCM_8"))
         cl.leveled("bulk", "Geen RC4, DES, 3DES, IDEA, SEED, NULL of EXPORT", ONVOLDOENDE if weak else GOED,
                    ("aangeboden: " + ", ".join(weak)) if weak else "niet aangeboden", "Verwijder deze suites.",
-                   "§3.3.4 Tabel 8")
+                   "bulk_weak")
         ccm8 = names(lambda c: (c["enc"] or "").upper().endswith("CCM_8"))
         cl.leveled("bulk", "Geen AES-CCM_8 (ingekorte authenticatietag)", ONVOLDOENDE if ccm8 else GOED,
                    ("aangeboden: " + ", ".join(ccm8)) if ccm8 else "niet aangeboden", "Verwijder CCM_8-suites.",
-                   "§3.3.4 Tabel 8")
+                   "ccm8")
         cbc = names(lambda c: (c["enc"] or "").upper().endswith("_CBC") and c["levels"]["bulk"] == UIT_TE_FASEREN)
         cl.leveled("bulk", "Alleen AEAD-ciphers (GCM, CCM, ChaCha20-Poly1305); geen CBC", UIT_TE_FASEREN if cbc else GOED,
                    (f"{len(cbc)} CBC-suite(s): " + ", ".join(cbc)) if cbc else "geen CBC-suites",
-                   "Faseer CBC-suites uit (vereist encrypt-then-MAC, beperkt afdwingbaar).", "§3.3.4")
+                   "Faseer CBC-suites uit (vereist encrypt-then-MAC, beperkt afdwingbaar).", "cbc")
         sha1 = names(lambda c: c.get("mac") in ("SHA", "SHA1", "MD5"))
         cl.leveled("bulk", "Geen suites met SHA-1 of MD5 als MAC", ONVOLDOENDE if sha1 else GOED,
                    (f"{len(sha1)} suite(s): " + ", ".join(sha1)) if sha1 else "geen", "Verwijder ..._SHA- en MD5-suites.",
-                   "§3.3.5 Tabel 9")
+                   "hash")
         cam = names(lambda c: (c["enc"] or "").upper().startswith(("CAMELLIA", "ARIA")))
         cl.leveled("bulk", "Geen CAMELLIA of ARIA (tenzij onderbouwd)", UIT_TE_FASEREN if cam else GOED,
                    ("aangeboden: " + ", ".join(cam)) if cam else "niet aangeboden",
-                   "Verwijder CAMELLIA/ARIA tenzij er een interoperabiliteitsreden is.", "§3.3.4")
+                   "Verwijder CAMELLIA/ARIA tenzij er een interoperabiliteitsreden is.", "camellia")
         co = f.get("cipher_order")
         if co:
             bad = co.get("severity") in ("MEDIUM", "HIGH", "CRITICAL") or "NOT" in co.get("finding", "")
             P("bulk", "Servervoorkeur voor cipher suites ingeschakeld", FAIL if bad else PASS, None, co["finding"],
-              "Laat de server de volgorde bepalen, sterkste suites eerst." if bad else "", "Hoofdstuk 2, stap 3")
+              "Laat de server de volgorde bepalen, sterkste suites eerst." if bad else "", "server_order")
         for label, group in (("TLS 1.3", tls13_suites), ("TLS 1.2", [s for s in tls12_suites if s[0] == "TLSv1.2"])):
             if not group:
                 continue
@@ -730,7 +899,7 @@ def assess(f, ctx):
                 rows.append(f"{s[1]} = {LEVEL_NAME[s[2]['level']]}")
             lv = worst([s[2]["level"] for s in group])
             cl.leveled("bulk", f"Cipher suites {label} (niveau = zwakste onderdeel)", lv, "; ".join(rows),
-                       "Beperk tot de suites uit Bijlage B (goed/voldoende).", "Bijlage B")
+                       "Beperk tot de suites uit Bijlage B (goed/voldoende).", "suites")
         old = [s for s in suites if s[0] in ("TLSv1", "TLSv1.1", "SSLv3", "SSLv2")]
         if old:
             P("bulk", "Cipher suites op TLS 1.0/1.1/SSL", FAIL, ONVOLDOENDE,
@@ -743,20 +912,20 @@ def assess(f, ctx):
     if crime:
         bad = crime.get("severity") in ("MEDIUM", "HIGH", "CRITICAL")
         cl.leveled("opts", "TLS-compressie uitgeschakeld (CRIME)", ONVOLDOENDE if bad else GOED, crime["finding"],
-                   "Schakel TLS-compressie uit.", "§3.4.1 Tabel 10")
+                   "Schakel TLS-compressie uit.", "compression")
     breach = f.get("BREACH")
     if breach:
         bad = breach.get("severity") in ("MEDIUM", "HIGH", "CRITICAL")
         P("opts", "HTTP-compressie beoordeeld op BREACH (alleen '/' getest)", FAIL if bad else INFO, None,
           breach["finding"], "Controleer pagina's met gevoelige data/tokens handmatig." if not bad else
-          "HTTP-compressie op gevoelige pagina's: beoordeel BREACH-risico.", "§3.4.1")
+          "HTTP-compressie op gevoelige pagina's: beoordeel BREACH-risico.", "breach")
     if proto.get("TLS1_2") or proto.get("TLS1_1") or proto.get("TLS1"):
         sr = f.get("secure_renego")
         if sr:
             ok = "not" not in sr["finding"].lower() or sr.get("severity") == "OK"
             cl.leveled("opts", "Secure renegotiation (RFC 5746); geen insecure renegotiation",
                        VOLDOENDE if ok else ONVOLDOENDE, sr["finding"], "Update de TLS-bibliotheek (RFC 5746).",
-                       "§3.4.2 Tabel 11")
+                       "reneg_secure")
         cr = f.get("secure_client_renego")
         if cr:
             fd = cr["finding"].lower()
@@ -773,7 +942,7 @@ def assess(f, ctx):
             else:
                 lv, ev = None, "niet eenduidig"
             cl.leveled("opts", "Client-initiated renegotiation uitgeschakeld", lv, f"{ev} (testssl: {cr['finding']})",
-                       "Schakel client-initiated renegotiation uit, of limiteer het aantal pogingen.", "§3.4.2 Tabel 11")
+                       "Schakel client-initiated renegotiation uit, of limiteer het aantal pogingen.", "reneg_client")
     elif proto.get("TLS1_3") and all(proto.get(p) is False for p in ("TLS1_2", "TLS1_1", "TLS1")):
         P("opts", "Renegotiation", PASS, GOED, "n.v.t.: alleen TLS 1.3 (geen renegotiation)")
     else:
@@ -789,9 +958,9 @@ def assess(f, ctx):
             P("opts", "Sessiehervatting in TLS 1.2: ticketsleutel/sessieopslag afgeschermd en geroteerd",
               MANUAL, VOLDOENDE, ev,
               "Voldoende alleen mét aanvullende maatregelen: vraag na hoe de ticketsleutel/sessiecache wordt "
-              "beschermd en hoe vaak hij wordt vervangen; anders onvoldoende.", "§3.4.3 Tabel 12")
+              "beschermd en hoe vaak hij wordt vervangen; anders onvoldoende.", "resumption")
         else:
-            P("opts", "Sessiehervatting", PASS, GOED, ev + " (alleen TLS 1.3 of geen hervatting)", "", "§3.4.3 Tabel 12")
+            P("opts", "Sessiehervatting", PASS, GOED, ev + " (alleen TLS 1.3 of geen hervatting)", "", "resumption")
     ed = f.get("early_data")
     probe_ed = ctx.get("early_data_probe")
     decided = False
@@ -800,15 +969,15 @@ def assess(f, ctx):
         if fd == "supported" or ed.get("severity") == "HIGH":
             cl.leveled("opts", "0-RTT / early data uitgeschakeld", ONVOLDOENDE, f"testssl: {ed['finding']}",
                        "Schakel 0-RTT uit (replay-risico), tenzij een applicatiespecifiek profiel wordt gevolgd.",
-                       "§3.4.4 Tabel 13")
+                       "0rtt")
             decided = True
         elif "no early data" in fd or "no tls 1.3" in fd:
-            cl.leveled("opts", "0-RTT / early data uitgeschakeld", GOED, f"testssl: {ed['finding']}", "", "§3.4.4 Tabel 13")
+            cl.leveled("opts", "0-RTT / early data uitgeschakeld", GOED, f"testssl: {ed['finding']}", "", "0rtt")
             decided = True
     if not decided:
         if probe_ed and probe_ed[0] is not None:
             cl.leveled("opts", "0-RTT / early data uitgeschakeld", ONVOLDOENDE if probe_ed[0] else GOED,
-                       f"OpenSSL-probe: {probe_ed[1]}", "Schakel 0-RTT uit (replay-risico).", "§3.4.4 Tabel 13")
+                       f"OpenSSL-probe: {probe_ed[1]}", "Schakel 0-RTT uit (replay-risico).", "0rtt")
         elif proto.get("TLS1_3") is False:
             P("opts", "0-RTT / early data uitgeschakeld", PASS, GOED, "n.v.t. (geen TLS 1.3)")
         else:
@@ -822,17 +991,17 @@ def assess(f, ctx):
         has_ems = "extended master secret" in ext.lower()
         P("impl", "Extended Master Secret (RFC 7627)", PASS if (has_ems or only13) else FAIL, None,
           "aanwezig" if has_ems else ("n.v.t. (alleen TLS 1.3)" if only13 else "extensie ontbreekt"),
-          "" if (has_ems or only13) else "Update/configureer de TLS-bibliotheek voor RFC 7627.", "§4.1")
+          "" if (has_ems or only13) else "Update/configureer de TLS-bibliotheek voor RFC 7627.", "ems")
         cbc_present = any((s[2]["enc"] or "").upper().endswith("_CBC") for s in tls12_suites)
         if cbc_present:
             has_etm = "encrypt-then-mac" in ext.lower()
             P("impl", "Encrypt-then-MAC (RFC 7366) bij CBC-suites", PASS if has_etm else FAIL, None,
               "aanwezig" if has_etm else "CBC-suites zonder encrypt-then-mac",
-              "" if has_etm else "Activeer encrypt-then-MAC of verwijder CBC-suites.", "§3.3.4, Bijlage A")
+              "" if has_etm else "Activeer encrypt-then-MAC of verwijder CBC-suites.", "etm")
         hb = "heartbeat" in ext.lower()
         P("impl", "Geen onnodige functionaliteit (heartbeat-extensie)", FAIL if hb else PASS, None,
           "heartbeat-extensie actief" if hb else "geen heartbeat-extensie",
-          "Schakel heartbeat uit." if hb else "", "§4.1")
+          "Schakel heartbeat uit." if hb else "", "minimal")
 
     vuln_ids = ["heartbleed", "CCS", "ticketbleed", "ROBOT", "POODLE_SSL", "POODLE_TLS", "SWEET32", "FREAK",
                 "DROWN", "LOGJAM", "BEAST", "LUCKY13", "winshock", "RC4", "opossum", "starttls_injection"]
@@ -847,34 +1016,34 @@ def assess(f, ctx):
     if tested:
         P("impl", "Geen bekende implementatiekwetsbaarheden (Heartbleed, ROBOT, POODLE, SWEET32, ...)",
           FAIL if hits else PASS, None, "; ".join(hits) if hits else f"{tested} tests zonder bevinding",
-          "Patch de TLS-bibliotheek / pas configuratie aan." if hits else "", "§4.1")
+          "Patch de TLS-bibliotheek / pas configuratie aan." if hits else "", "lib_vulns")
     else:
         P("impl", "Geen bekende implementatiekwetsbaarheden", UNKNOWN, None, "kwetsbaarheidstests niet uitgevoerd (-U)")
     banner = f.finding("banner_server")
     P("impl", "TLS-bibliotheek en versie bekend en up-to-date", MANUAL, None,
       f"server-banner: {banner}" if banner else "niet extern vast te stellen",
-      "Vraag na welke bibliotheek (en versie) de dienst gebruikt.", "§4.1")
-    for title, ref in (("Cryptografisch veilige PRNG (geen Dual EC DRBG)", "§4.2"),
-                       ("TLS-proxy/anti-DDoS: privésleutels niet (zonder risicoanalyse) bij derden", "§4.3"),
-                       ("Certificaatbeheer ingericht (vernieuwing, sleutelbeheer)", "§4.4")):
+      "Vraag na welke bibliotheek (en versie) de dienst gebruikt.", "lib")
+    for title, ref in (("Cryptografisch veilige PRNG (geen Dual EC DRBG)", "prng"),
+                       ("TLS-proxy/anti-DDoS: privésleutels niet (zonder risicoanalyse) bij derden", "proxy"),
+                       ("Certificaatbeheer ingericht (vernieuwing, sleutelbeheer)", "certmgmt")):
         P("impl", title, MANUAL, None, "niet extern meetbaar", "Navragen bij de beheerder.", ref)
 
     # ---------------------------------------------------------------- quantum
     if proto.get("TLS1_3") is not None:
         P("pq", "TLS 1.3 beschikbaar (voorwaarde voor PQ-algoritmes)", PASS if proto.get("TLS1_3") else ADVICE, None,
-          "ja" if proto.get("TLS1_3") else "nee", "" if proto.get("TLS1_3") else "Schakel TLS 1.3 in.", "§4.5 stap 1")
+          "ja" if proto.get("TLS1_3") else "nee", "" if proto.get("TLS1_3") else "Schakel TLS 1.3 in.", "pq_tls13")
     P("pq", "Hybride sleuteluitwisseling of risicoanalyse waaruit blijkt dat dit nog niet nodig is",
       PASS if pq_found else MANUAL, None,
       ("aangeboden: " + ", ".join(pq_found)) if pq_found else "geen hybride KEM gemeten",
-      "" if pq_found else "Vraag naar de PQ-risicoanalyse (store-now-decrypt-later).", "§4.5 stap 6")
+      "" if pq_found else "Vraag naar de PQ-risicoanalyse (store-now-decrypt-later).", "pq_risk")
     if have_cipher_data:
         strong = sorted({s[1] for s in suites if s[2]["levels"].get("bulk") == GOED and s[2].get("mac") in ("SHA384", "SHA512", None)
                          or (s[2].get("tls13") and s[2]["levels"].get("bulk") == GOED)})
         P("pq", "Bulkversleuteling en hashing met 256-bit sterkte beschikbaar", PASS if strong else FAIL, None,
           ", ".join(strong[:4]) if strong else "geen AES-256-GCM/ChaCha20-Poly1305-suite",
-          "" if strong else "Bied AES-256-GCM of ChaCha20-Poly1305 aan.", "§4.5 stap 3")
+          "" if strong else "Bied AES-256-GCM of ChaCha20-Poly1305 aan.", "pq_256")
     P("pq", "Crypto-agility; TLS-gebruik in de organisatie geïnventariseerd", MANUAL, None, "niet extern meetbaar",
-      "Navragen bij de beheerder.", "§4.5 stap 4-5")
+      "Navragen bij de beheerder.", "pq_agility")
     return cl
 
 
@@ -913,8 +1082,8 @@ def render_markdown(cl, meta):
                 out.append(f"    - Gemeten: {it['evidence']}")
             if it.get("advice"):
                 out.append(f"    - Advies: {it['advice']}")
-            if it.get("ref"):
-                out.append(f"    - Richtlijn: {it['ref']}")
+            for rf in it.get("references", []):
+                out.append(f"    - Richtlijn: {rf['passage']} (p. {rf['pages']}): {rf['rule']}")
         out.append("")
     # bevindingen voor rapportage
     fails = [it for it in cl.items if it["status"] == FAIL]
@@ -922,13 +1091,14 @@ def render_markdown(cl, meta):
     out.append("## Bevindingen voor rapportage")
     out.append("")
     if fails:
-        out.append("| # | Bevinding | NCSC-niveau | Gemeten | Richtlijn |")
+        out.append("| # | Bevinding | NCSC-niveau | Gemeten | Richtlijn (passage, pagina) |")
         out.append("| --- | --- | --- | --- | --- |")
         for i, it in enumerate(fails, 1):
             ev = it["evidence"].replace("|", "/")
             if len(ev) > 300:
                 ev = ev[:297] + "..."
-            out.append(f"| {i} | {it['title']} | {it.get('level') or '-'} | {ev} | {it.get('ref', '')} |")
+            refs = "; ".join(f"{rf['passage']} (p. {rf['pages']})" for rf in it.get("references", []))
+            out.append(f"| {i} | {it['title']} | {it.get('level') or '-'} | {ev} | {refs.replace('|', '/')} |")
     else:
         out.append("Geen bevindingen op extern meetbare punten.")
     man = [it for it in cl.items if it["status"] == MANUAL]
@@ -966,6 +1136,9 @@ def print_console(cl, meta, color=True):
             print(f"  {c}{lab:<9}{r} {it['title']}{lvl}")
             if it["status"] in (FAIL, UNKNOWN) and it.get("evidence"):
                 print(f"            {it['evidence'][:220]}")
+            if it["status"] in (FAIL, ADVICE, MANUAL):
+                for rf in it.get("references", []):
+                    print(f"            Richtlijn: {rf['passage']} (p. {rf['pages']})")
 
 
 # --------------------------------------------------------------------------------------

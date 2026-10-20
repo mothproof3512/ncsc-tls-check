@@ -51,6 +51,19 @@ Het script draait testssl.sh met `-p -s -f -P -S -h -U` (geen client-simulaties)
 
 Het script stopt met exitcode 1 zodra er minstens één bevinding is, zodat je het in een pipeline kunt gebruiken.
 
+## Verwijzingen naar de richtlijn
+
+Bij elk checklistpunt staat de passage uit de richtlijn waarop de beoordeling is gebaseerd, met paginanummer, bijvoorbeeld:
+
+```
+BEVINDING Alleen AEAD-ciphers (GCM, CCM, ChaCha20-Poly1305); geen CBC [uit te faseren]
+          4 CBC-suite(s): ...
+          Richtlijn: §3.3.4 Algoritmes voor bulkversleuteling, Tabel 8 en toelichting (p. 20-21)
+          Richtlijn: §3.2 Richtlijn voor een veilige TLS-configuratie (p. 16)
+```
+
+De checklist en de JSON bevatten daarnaast de kern van de regel in een zin. De paginanummers horen bij versie 2025-05 van de richtlijn.
+
 ## Statussen
 
 | Status | Betekenis |
