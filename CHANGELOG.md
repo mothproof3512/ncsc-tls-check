@@ -9,6 +9,14 @@ Het formaat volgt [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/) en de
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-20
+
+### Toegevoegd
+- Elk NAVRAAG-punt bevat de precieze vraag voor de beheerder en wat als voldoende antwoord telt volgens de richtlijn. De vraag staat in de console, bij het punt in de checklist en in de JSON (`question`, `acceptable_answer`).
+- Nieuwe sectie "Vragenlijst voor de beheerder" onderaan de checklist: genummerde vragen met meetgegevens, verwijzing naar de richtlijn, het criterium en ruimte voor het antwoord, klaar om door te sturen.
+- Bevindingen op niveau *uit te faseren* krijgen een vraag naar het uitfaseerplan (§3.2) met de concrete instellingen.
+- Het navraagpunt over TLS-proxy's noemt een herkende CDN of proxy (Cloudflare, Akamai, F5, ...) uit de banners. Het punt over certificaatbeheer noemt de verloopdatum en de uitgever.
+
 ## [1.1.0] - 2026-10-20
 
 ### Toegevoegd
@@ -31,6 +39,7 @@ Het formaat volgt [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/) en de
 - Poortontdekking met nmap (`--discover`) of een bestaande nmap-XML (`--nmap-xml`), inclusief automatische STARTTLS-detectie.
 - Uitvoer per dienst als Markdown-checklist en als JSON, plus `overzicht.md` bij meerdere diensten.
 
-[Unreleased]: https://github.com/mothproof3512/ncsc-tls-check/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/mothproof3512/ncsc-tls-check/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/mothproof3512/ncsc-tls-check/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/mothproof3512/ncsc-tls-check/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/mothproof3512/ncsc-tls-check/releases/tag/v1.0.0

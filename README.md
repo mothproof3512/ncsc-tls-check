@@ -64,6 +64,21 @@ BEVINDING Alleen AEAD-ciphers (GCM, CCM, ChaCha20-Poly1305); geen CBC [uit te fa
 
 De checklist en de JSON bevatten daarnaast de kern van de regel in een zin. De paginanummers horen bij versie 2025-05 van de richtlijn.
 
+## Vragen voor de beheerder
+
+Niet alles is van buitenaf te meten. Voor elk NAVRAAG-punt geeft het script de precieze vraag voor de beheerder en wat volgens de richtlijn een voldoende antwoord is. Het gaat om:
+- sessiehervatting in TLS 1.2;
+- de TLS-bibliotheek;
+- de PRNG;
+- sleutels bij een TLS-proxy of CDN;
+- certificaatbeheer;
+- de post-quantum risicoanalyse;
+- crypto-agility.
+
+Bevindingen op niveau *uit te faseren* krijgen ook een vraag: naar het uitfaseerplan uit §3.2.
+
+Onderaan elke checklist staat de **Vragenlijst voor de beheerder**: genummerde vragen met meetgegevens, verwijzing naar de richtlijn, criterium en een antwoordveld. Die kun je zo doorsturen.
+
 ## Statussen
 
 | Status | Betekenis |

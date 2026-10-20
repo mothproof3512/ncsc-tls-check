@@ -26,7 +26,7 @@ import subprocess
 import sys
 import tempfile
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 GUIDELINE = "NCSC Transport Layer Security (TLS) - Beveiligingsrichtlijnen versie 2025-05"
 
 # --------------------------------------------------------------------------------------
@@ -182,6 +182,83 @@ TITLE_REFS = [
     ("TLS 1.3 beschikbaar", "pq_tls13"), ("Hybride sleuteluitwisseling of risicoanalyse", "pq_risk"),
     ("Bulkversleuteling en hashing met 256-bit", "pq_256"), ("Crypto-agility", "pq_agility"),
 ]
+
+
+# --------------------------------------------------------------------------------------
+# Vragen voor de beheerder bij NAVRAAG-punten: (vraag, wat telt als voldoende antwoord)
+# {target} wordt ingevuld met host:poort. Gebaseerd op de passage in REFS met dezelfde sleutel.
+# --------------------------------------------------------------------------------------
+QUESTIONS = {
+    "inventory": (
+        "Op welke poorten en via welke diensten biedt {host} TLS of STARTTLS aan (bijvoorbeeld HTTPS, "
+        "SMTP, IMAP, VPN of beheerinterfaces), en vallen die allemaal binnen de scope van deze test?",
+        "Een volledige lijst van TLS-diensten op de host; elke dienst wordt apart getoetst."),
+    "resumption": (
+        "De dienst {target} ondersteunt sessiehervatting in TLS 1.2 (sessietickets en/of sessie-ID's).\n"
+        "a) Waar staat de encryptiesleutel voor sessietickets (alleen in geheugen, in een bestand of gedeeld "
+        "tussen servers en load balancers), en welke personen en processen hebben er toegang toe?\n"
+        "b) Hoe vaak wordt die sleutel vervangen, en gebeurt dat automatisch?\n"
+        "c) Waar en hoe lang worden sessieparameters voor sessie-ID's bewaard (sessiecache), en hoe is die "
+        "afgeschermd?",
+        "De sleutel en de sessiecache zijn alleen toegankelijk voor het TLS-proces (bij voorkeur alleen in "
+        "geheugen) en de sleutel wordt automatisch en regelmatig vervangen. Zonder deze maatregelen is "
+        "sessiehervatting in TLS 1.2 onvoldoende. Alternatief: hervatting alleen via TLS 1.3 (goed)."),
+    "lib": (
+        "Welke TLS-bibliotheek en welke versie gebruikt {target} (bijvoorbeeld OpenSSL, BoringSSL, GnuTLS, "
+        "Schannel of Java JSSE), en in welke software wordt TLS afgehandeld (webserver, load balancer, "
+        "reverse proxy of WAF)? Hoe en binnen welke termijn worden beveiligingsupdates van die bibliotheek "
+        "doorgevoerd?",
+        "Een ondersteunde, actuele versie van een goed onderhouden bibliotheek, met een vast proces voor "
+        "beveiligingsupdates. De bibliotheek ondersteunt RFC 7627 en RFC 5746 en bij voorkeur al "
+        "quantumveilige algoritmes."),
+    "prng": (
+        "Welke random number generator gebruikt de TLS-bibliotheek van {target} (bijvoorbeeld de CSPRNG van "
+        "het besturingssysteem via getrandom of /dev/urandom, de DRBG van de bibliotheek, of een hardware-RNG "
+        "of HSM)? Kun je bevestigen dat Dual EC DRBG niet wordt gebruikt?",
+        "Een cryptografisch veilige PRNG van het besturingssysteem of de bibliotheek, eventueel aangevuld met "
+        "een hardware-RNG. Dual EC DRBG is onveilig."),
+    "proxy": (
+        "Wordt TLS voor {target} afgehandeld of geïnspecteerd door een derde partij (CDN, anti-DDoS-dienst, "
+        "WAF of TLS-inspectie)? Zo ja:\n"
+        "a) Heeft die partij de privésleutel van het certificaat?\n"
+        "b) Is daarvoor een risicoanalyse gedaan, en zijn er contractuele afspraken over het beheer van de "
+        "sleutel?\n"
+        "c) Wordt periodiek gecontroleerd of de leverancier die afspraken naleeft?\n"
+        "d) Is een oplossing zonder sleuteloverdracht (zoals keyless SSL) overwogen?",
+        "Geen derde partij met de privésleutel, of een gedocumenteerde risicoanalyse met contractuele "
+        "maatregelen die aantoonbaar worden gecontroleerd."),
+    "certmgmt": (
+        "Hoe is het certificaatbeheer voor {target} ingericht?\n"
+        "a) Wie is eigenaar van het certificaat?\n"
+        "b) Hoe wordt tijdige vernieuwing bewaakt: automatisch (bijvoorbeeld via ACME) of handmatig met "
+        "monitoring?\n"
+        "c) Waar wordt de privésleutel bewaard en wie heeft toegang?\n"
+        "d) Is er een procedure om het certificaat bij compromittering snel te laten intrekken en te "
+        "vervangen?",
+        "Een vaste eigenaar, geautomatiseerde of bewaakte vernieuwing, afgeschermde opslag van de privésleutel "
+        "en een beschreven procedure voor intrekken en vervangen."),
+    "pq_risk": (
+        "Is voor de gegevens die via {target} gaan een risicoanalyse gedaan naar de quantumdreiging, met name "
+        "store-now-decrypt-later?\n"
+        "a) Hoe lang moeten deze gegevens vertrouwelijk blijven?\n"
+        "b) Wat was de conclusie van de analyse?\n"
+        "c) Is er een plan om hybride sleuteluitwisseling (X25519MLKEM768) in te voeren?",
+        "Een vastgelegde risicoanalyse. Is er geen urgent risico, dan mag gewacht worden op standaardisatie. "
+        "Is er wel een significant risico, dan wordt een hybride sleuteluitwisseling nu al ingevoerd."),
+    "pq_agility": (
+        "Heeft de organisatie een overzicht van waar TLS wordt gebruikt (systemen, certificaten en "
+        "algoritmes)? Kunnen protocolversies, cipher suites en algoritmes centraal en snel worden aangepast? "
+        "Hoe lang duurt het om bijvoorbeeld één cipher suite op alle systemen uit te schakelen?",
+        "Een actueel overzicht van het TLS-gebruik, en een configuratie die snel en centraal aan te passen is "
+        "(crypto-agility)."),
+    "phaseout": (
+        "Voor de volgende instelling(en) geldt het NCSC-niveau 'uit te faseren': {title}.\n"
+        "Welke clients of koppelingen hebben deze instelling(en) nog nodig? Is er een vastgelegd uitfaseerplan met meetbare criteria (een datum, een "
+        "minimale clientversie of een maximaal percentage gebruikers), en is dat bekrachtigd door de "
+        "producteigenaar?",
+        "Een gedocumenteerde reden en een uitfaseerplan met meetbare criteria, bekrachtigd door de "
+        "verantwoordelijke van de toepassing. Zonder plan: uitschakelen."),
+}
 
 
 def title_ref(title):
@@ -599,8 +676,15 @@ SECTIONS = [
 
 
 class Checklist:
-    def __init__(self):
+    def __init__(self, target="", host=""):
         self.items = []
+        self.target, self.host = target, host
+
+    def question_for(self, key, title):
+        if key not in QUESTIONS:
+            return None, None
+        q, ok = QUESTIONS[key]
+        return q.format(target=self.target or "de dienst", host=self.host or "de host", title=title), ok
 
     def add(self, section, title, status, level=None, evidence="", advice="", ref=""):
         ref = ref or title_ref(title)
@@ -612,9 +696,25 @@ class Checklist:
                            "level": LEVEL_NAME[level] if level in LEVEL_NAME else level,
                            "level_num": level if isinstance(level, int) else None,
                            "evidence": evidence, "advice": advice, "ref": ref,
+                           **self._question(status, level, ref, title, evidence),
                            "references": [{"key": r, "passage": REFS[r][0] if r in REFS else r,
                                            "pages": REFS[r][1] if r in REFS else "",
                                            "rule": ref_rule(r)} for r in refs]})
+
+    def _question(self, status, level, ref, title, evidence=""):
+        """Vraag aan de beheerder: bij NAVRAAG-punten, en bij 'uit te faseren' naar het uitfaseerplan."""
+        if status == MANUAL:
+            q, ok = self.question_for(ref, title)
+        elif status == FAIL and level == UIT_TE_FASEREN:
+            # noem de concrete instelling(en): bij een suite-overzicht alleen de uit te faseren suites
+            named = re.findall(r"(\S+) = uit te faseren", evidence or "")
+            subject = ", ".join(named) if named else (evidence or title)
+            if len(subject) > 400:
+                subject = subject[:397] + "..."
+            q, ok = self.question_for("phaseout", subject)
+        else:
+            q = ok = None
+        return {"question": q, "acceptable_answer": ok} if q else {}
 
     def leveled(self, section, title, level, evidence="", advice="", ref=""):
         self.add(section, title, status_for(level), level, evidence,
@@ -623,7 +723,7 @@ class Checklist:
 
 def assess(f, ctx):
     """f = Findings (testssl), ctx = dict met probe-resultaten en metadata."""
-    cl = Checklist()
+    cl = Checklist(ctx.get("target", ""), ctx.get("host", ""))
     P = lambda *a, **k: cl.add(*a, **k)  # noqa: E731
 
     # ---------------------------------------------------------------- voorbereiding
@@ -1023,10 +1123,24 @@ def assess(f, ctx):
     P("impl", "TLS-bibliotheek en versie bekend en up-to-date", MANUAL, None,
       f"server-banner: {banner}" if banner else "niet extern vast te stellen",
       "Vraag na welke bibliotheek (en versie) de dienst gebruikt.", "lib")
-    for title, ref in (("Cryptografisch veilige PRNG (geen Dual EC DRBG)", "prng"),
-                       ("TLS-proxy/anti-DDoS: privésleutels niet (zonder risicoanalyse) bij derden", "proxy"),
-                       ("Certificaatbeheer ingericht (vernieuwing, sleutelbeheer)", "certmgmt")):
-        P("impl", title, MANUAL, None, "niet extern meetbaar", "Navragen bij de beheerder.", ref)
+    P("impl", "Cryptografisch veilige PRNG (geen Dual EC DRBG)", MANUAL, None, "niet extern meetbaar",
+      "Navragen bij de beheerder.", "prng")
+    # aanwijzingen voor een CDN/anti-DDoS/proxy uit de HTTP-banners
+    banners = " ".join(x for x in (f.finding("banner_server", ""), f.finding("banner_reverseproxy", ""),
+                                   f.finding("cert_caIssuers", "")) if x)
+    cdn = sorted({name for pat, name in (
+        (r"cloudflare", "Cloudflare"), (r"akamai", "Akamai"), (r"fastly", "Fastly"), (r"imperva|incapsula", "Imperva"),
+        (r"sucuri", "Sucuri"), (r"cloudfront|awselb|amazon", "AWS CloudFront/ELB"), (r"azure|front ?door", "Azure"),
+        (r"varnish", "Varnish"), (r"big-?ip|f5", "F5 BIG-IP"), (r"netscaler|citrix", "Citrix NetScaler"))
+        if re.search(pat, banners, re.I)})
+    P("impl", "TLS-proxy/anti-DDoS: privésleutels niet (zonder risicoanalyse) bij derden", MANUAL, None,
+      (f"banner wijst op {', '.join(cdn)}: TLS eindigt mogelijk bij een derde partij" if cdn
+       else "geen CDN/proxy herkend in de banners; niet extern uit te sluiten"),
+      "Navragen bij de beheerder.", "proxy")
+    exp = f.finding("cert_notAfter")
+    P("impl", "Certificaatbeheer ingericht (vernieuwing, sleutelbeheer)", MANUAL, None,
+      (f"certificaat verloopt {exp}; uitgever: {f.finding('cert_caIssuers', '?')}" if exp else "niet extern meetbaar"),
+      "Navragen bij de beheerder.", "certmgmt")
 
     # ---------------------------------------------------------------- quantum
     if proto.get("TLS1_3") is not None:
@@ -1084,6 +1198,10 @@ def render_markdown(cl, meta):
                 out.append(f"    - Advies: {it['advice']}")
             for rf in it.get("references", []):
                 out.append(f"    - Richtlijn: {rf['passage']} (p. {rf['pages']}): {rf['rule']}")
+            if it.get("question"):
+                q = it["question"].replace("\n", "\n      ")
+                out.append(f"    - **Vraag aan beheerder:** {q}")
+                out.append(f"    - Voldoende als: {it['acceptable_answer']}")
         out.append("")
     # bevindingen voor rapportage
     fails = [it for it in cl.items if it["status"] == FAIL]
@@ -1101,13 +1219,29 @@ def render_markdown(cl, meta):
             out.append(f"| {i} | {it['title']} | {it.get('level') or '-'} | {ev} | {refs.replace('|', '/')} |")
     else:
         out.append("Geen bevindingen op extern meetbare punten.")
-    man = [it for it in cl.items if it["status"] == MANUAL]
-    if man:
+    qs = [it for it in cl.items if it.get("question")]
+    if qs:
         out.append("")
-        out.append("**Navragen bij beheerder:**")
+        out.append("## Vragenlijst voor de beheerder")
         out.append("")
-        for it in man:
-            out.append(f"- [ ] {it['title']}")
+        out.append(f"Dienst: {meta['target']}. Deze punten zijn niet van buitenaf te meten; de antwoorden "
+                   "bepalen of ze voldoen aan de richtlijn.")
+        for i, it in enumerate(qs, 1):
+            refs = "; ".join(f"{rf['passage']} (p. {rf['pages']})" for rf in it.get("references", []))
+            out.append("")
+            out.append(f"### {i}. {it['title']}")
+            out.append("")
+            for line in it["question"].split("\n"):
+                out.append(line + "  ")
+            out.append("")
+            if it.get("evidence") and it["evidence"] != "niet extern meetbaar":
+                out.append(f"*Gemeten:* {it['evidence']}  ")
+            out.append(f"*Richtlijn:* {refs}  ")
+            out.append(f"*Voldoende als:* {it['acceptable_answer']}")
+            out.append("")
+            out.append("**Antwoord:**")
+            out.append("")
+            out.append("> ")
     unk = [it for it in cl.items if it["status"] == UNKNOWN]
     if unk:
         out.append("")
@@ -1139,6 +1273,8 @@ def print_console(cl, meta, color=True):
             if it["status"] in (FAIL, ADVICE, MANUAL):
                 for rf in it.get("references", []):
                     print(f"            Richtlijn: {rf['passage']} (p. {rf['pages']})")
+            if it["status"] == MANUAL and it.get("question"):
+                print("            Vraag: " + it["question"].replace("\n", "\n                   "))
 
 
 # --------------------------------------------------------------------------------------
@@ -1237,7 +1373,7 @@ def scan_target(target, args, outdir, starttls=None, discovery=None):
     meta = {"target": f"{host}:{port}" + (f" (STARTTLS {starttls})" if starttls else ""),
             "date": dt.datetime.now().strftime("%Y-%m-%d %H:%M"), "starttls": starttls, "ip": args.ip,
             "md": base + "_ncsc.md"}
-    ctx = {"discovery": discovery}
+    ctx = {"discovery": discovery, "target": f"{host}:{port}", "host": host}
 
     # ---- OpenSSL
     ver, vtxt = openssl_version(args.openssl)
