@@ -9,6 +9,15 @@ Het formaat volgt [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/) en de
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-20
+
+### Toegevoegd
+- Gecombineerd rapport `bevindingen.md` met rapportbevindingen in het sjabloonformaat. Velden: Scope, Category, Kill chain phase, Severity default, Description, Impact, Test approach, Remediation, Detection note, OWASP Top10 2025, WSTG, ASVS 5.0, MITRE ATTACK, CWE, PayloadsAllTheThings, OSCP plus, CISSP domain, Related IDs en Last updated. Daarna volgen Affected assets, Evidence (met reproductiecommando per asset), NCSC-referenties en eventueel een vraag aan de beheerder.
+- Gerelateerde checklistpunten worden gekoppeld tot negen vaste bevindingen, zoals verouderde protocolversies, zwakke sleuteluitwisseling en zwakke cipher suites. Elke bevinding noemt alle getroffen assets en verwijst via Related IDs naar samenhangende bevindingen en CVE's.
+- Severity wordt afgeleid van het NCSC-niveau en de uitbuitbaarheid: onvoldoende = High of Medium, uit te faseren = Low, advies = Info.
+- Overzichtstabel, herstelvolgorde per asset en een bijlage met openstaande navraagpunten.
+- `--id-template` voor het eigen ID-schema (bv. `AV-WEB-20.{n}`). `--report-from MAP` maakt het rapport uit eerdere runs, zonder opnieuw te scannen.
+
 ## [1.2.0] - 2026-10-20
 
 ### Toegevoegd
@@ -39,7 +48,8 @@ Het formaat volgt [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/) en de
 - Poortontdekking met nmap (`--discover`) of een bestaande nmap-XML (`--nmap-xml`), inclusief automatische STARTTLS-detectie.
 - Uitvoer per dienst als Markdown-checklist en als JSON, plus `overzicht.md` bij meerdere diensten.
 
-[Unreleased]: https://github.com/mothproof3512/ncsc-tls-check/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/mothproof3512/ncsc-tls-check/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/mothproof3512/ncsc-tls-check/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/mothproof3512/ncsc-tls-check/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/mothproof3512/ncsc-tls-check/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/mothproof3512/ncsc-tls-check/releases/tag/v1.0.0

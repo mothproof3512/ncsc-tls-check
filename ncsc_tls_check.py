@@ -26,7 +26,7 @@ import subprocess
 import sys
 import tempfile
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 GUIDELINE = "NCSC Transport Layer Security (TLS) - Beveiligingsrichtlijnen versie 2025-05"
 
 # --------------------------------------------------------------------------------------
@@ -194,7 +194,7 @@ QUESTIONS = {
         "SMTP, IMAP, VPN of beheerinterfaces), en vallen die allemaal binnen de scope van deze test?",
         "Een volledige lijst van TLS-diensten op de host; elke dienst wordt apart getoetst."),
     "resumption": (
-        "De dienst {target} ondersteunt sessiehervatting in TLS 1.2 (sessietickets en/of sessie-ID's).\n"
+        "Sessiehervatting in TLS 1.2 (sessietickets en/of sessie-ID's) is actief op {target}.\n"
         "a) Waar staat de encryptiesleutel voor sessietickets (alleen in geheugen, in een bestand of gedeeld "
         "tussen servers en load balancers), en welke personen en processen hebben er toegang toe?\n"
         "b) Hoe vaak wordt die sleutel vervangen, en gebeurt dat automatisch?\n"
@@ -686,7 +686,7 @@ class Checklist:
         q, ok = QUESTIONS[key]
         return q.format(target=self.target or "de dienst", host=self.host or "de host", title=title), ok
 
-    def add(self, section, title, status, level=None, evidence="", advice="", ref=""):
+    def add(self, section, title, status, level=None, evidence="", advice="", ref="", sev_hint=None, cves=None):
         ref = ref or title_ref(title)
         refs = [ref] if ref else []
         # uit te faseren -> ook verwijzen naar de eis van een uitfaseerplan (§3.2)
@@ -700,6 +700,10 @@ class Checklist:
                            "references": [{"key": r, "passage": REFS[r][0] if r in REFS else r,
                                            "pages": REFS[r][1] if r in REFS else "",
                                            "rule": ref_rule(r)} for r in refs]})
+        if sev_hint:
+            self.items[-1]["sev_hint"] = sev_hint
+        if cves:
+            self.items[-1]["cves"] = sorted(set(cves))
 
     def _question(self, status, level, ref, title, evidence=""):
         """Vraag aan de beheerder: bij NAVRAAG-punten, en bij 'uit te faseren' naar het uitfaseerplan."""
@@ -1105,7 +1109,7 @@ def assess(f, ctx):
 
     vuln_ids = ["heartbleed", "CCS", "ticketbleed", "ROBOT", "POODLE_SSL", "POODLE_TLS", "SWEET32", "FREAK",
                 "DROWN", "LOGJAM", "BEAST", "LUCKY13", "winshock", "RC4", "opossum", "starttls_injection"]
-    hits, tested = [], 0
+    hits, tested, hit_sev, hit_cves = [], 0, set(), []
     for vid in vuln_ids:
         it = f.get(vid)
         if not it:
@@ -1113,10 +1117,13 @@ def assess(f, ctx):
         tested += 1
         if it.get("severity") in ("MEDIUM", "HIGH", "CRITICAL"):
             hits.append(f"{vid}: {it['finding']}")
+            hit_sev.add(it["severity"])
+            hit_cves += re.findall(r"CVE-\d{4}-\d+", it.get("cve", "") or "")
     if tested:
         P("impl", "Geen bekende implementatiekwetsbaarheden (Heartbleed, ROBOT, POODLE, SWEET32, ...)",
           FAIL if hits else PASS, None, "; ".join(hits) if hits else f"{tested} tests zonder bevinding",
-          "Patch de TLS-bibliotheek / pas configuratie aan." if hits else "", "lib_vulns")
+          "Patch de TLS-bibliotheek / pas configuratie aan." if hits else "", "lib_vulns",
+          sev_hint=("High" if hit_sev & {"HIGH", "CRITICAL"} else "Medium") if hits else None, cves=hit_cves)
     else:
         P("impl", "Geen bekende implementatiekwetsbaarheden", UNKNOWN, None, "kwetsbaarheidstests niet uitgevoerd (-U)")
     banner = f.finding("banner_server")
@@ -1251,6 +1258,369 @@ def render_markdown(cl, meta):
             out.append(f"- [ ] {it['title']} — {it['evidence']}")
     out.append("")
     return "\n".join(out)
+
+
+# --------------------------------------------------------------------------------------
+# Rapportage: gekoppelde bevindingen in het sjabloonformaat
+# --------------------------------------------------------------------------------------
+SEV_ORDER = {"Critical": 5, "High": 4, "Medium": 3, "Low": 2, "Info": 1}
+COMMON = {"category": "Cryptografie", "patt": "Methodology and Resources", "oscp": "Enumeration",
+          "test": "Geautomatiseerd met ncsc_tls_check.py (testssl.sh, aanvullende OpenSSL-probes, nmap) en getoetst "
+                  "aan de NCSC TLS-beveiligingsrichtlijnen 2025-05, conform WSTG-CRYP-01."}
+
+# Stabiele nummers: dezelfde soort bevinding krijgt in elk rapport hetzelfde ID.
+FINDING_GROUPS = [
+    {"n": 1, "keys": ["versions", "downgrade"], "title": "Verouderde TLS/SSL-protocolversies ondersteund",
+     "sev_default": "Medium", "kill": "Credential Access",
+     "desc": "De dienst ondersteunt protocolversies die volgens het NCSC onvoldoende zijn (TLS 1.0, TLS 1.1 of SSL), "
+             "of ondersteunt TLS 1.3 niet.",
+     "impact": "Een aanvaller in het netwerkpad kan een verbinding mogelijk afdwingen op een verouderde versie en "
+               "bekende zwakheden misbruiken (bijv. BEAST, POODLE), waardoor vertrouwelijke gegevens onderweg "
+               "kunnen uitlekken of worden gemanipuleerd.",
+     "fix": "Schakel TLS 1.0, TLS 1.1 en alle SSL-versies uit. Bied TLS 1.3 aan en TLS 1.2 alleen voor clients die "
+            "het nog nodig hebben.",
+     "config": ["Apache: SSLProtocol -all +TLSv1.2 +TLSv1.3", "nginx: ssl_protocols TLSv1.2 TLSv1.3;"],
+     "detect": "Monitor op handshakes met TLS 1.0/1.1/SSL en op downgradepogingen (TLS_FALLBACK_SCSV-alerts) in "
+               "loadbalancer-, WAF- of IDS-logging.",
+     "owasp": "A04:2025, A02:2025", "wstg": "WSTG-CRYP-01", "asvs": "V12", "mitre": "T1557, T1040",
+     "cwe": "CWE-327, CWE-757", "cissp": "D3", "related": [2, 3],
+     "repro": "testssl.sh -p {t}"},
+    {"n": 2, "keys": ["kx", "dhe", "curves"], "title": "Zwakke sleuteluitwisseling of geen forward secrecy",
+     "sev_default": "Medium", "kill": "Credential Access",
+     "desc": "De dienst biedt sleuteluitwisseling aan zonder forward secrecy (statische RSA/DH/ECDH, PSK, SRP), "
+             "uit te faseren DHE, of zwakke groepen en curves.",
+     "impact": "Zonder forward secrecy kan wie de privésleutel van de server bemachtigt al het opgenomen verkeer, "
+               "ook uit het verleden, ontsleutelen. Zwakke DH-groepen verlagen de cryptografische sterkte.",
+     "fix": "Gebruik uitsluitend ECDHE (bij voorkeur met hybride X25519MLKEM768). Verwijder statische RSA- en "
+            "DHE-suites en beperk de groepen tot X25519, secp256r1, secp384r1 (en X448/secp521r1).",
+     "config": ["Apache: SSLOpenSSLConfCmd Groups X25519MLKEM768:X25519:secp256r1:secp384r1",
+                "nginx: ssl_ecdh_curve X25519MLKEM768:X25519:prime256v1:secp384r1;"],
+     "detect": "Monitor onderhandelde sleuteluitwisseling en groepen; alarmeer op RSA-sleuteltransport of "
+               "finite-field DHE.",
+     "owasp": "A04:2025", "wstg": "WSTG-CRYP-01", "asvs": "V11, V12", "mitre": "T1557, T1040",
+     "cwe": "CWE-326, CWE-327", "cissp": "D3", "related": [3, 9],
+     "repro": "testssl.sh -f {t}"},
+    {"n": 3, "keys": ["bulk_weak", "ccm8", "cbc", "camellia", "suites", "server_order", "etm", "hash_mac"],
+     "title": "Zwakke of verouderde cipher suites", "sev_default": "Medium", "kill": "Credential Access",
+     "desc": "De dienst biedt cipher suites aan met verouderde bulkversleuteling of integriteitsbescherming "
+             "(CBC, CAMELLIA/ARIA, CCM_8, SHA-1-MAC, 3DES/RC4/NULL), of laat de cipher-volgorde aan de client over.",
+     "impact": "Zwakke suites verlagen de cryptografische sterkte en maken padding- en timing-aanvallen mogelijk "
+               "(bijv. Lucky13, SWEET32), met risico op het uitlekken of manipuleren van gegevens onderweg.",
+     "fix": "Beperk de suites tot AEAD (AES-GCM, ChaCha20-Poly1305) volgens Bijlage B van de NCSC-richtlijn en laat "
+            "de server de volgorde bepalen.",
+     "config": ["Apache: SSLCipherSuite ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:"
+                "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:"
+                "ECDHE-RSA-AES128-GCM-SHA256 en SSLHonorCipherOrder on",
+                "nginx: ssl_ciphers <zelfde lijst>; ssl_prefer_server_ciphers on;"],
+     "detect": "Monitor de onderhandelde cipher suites; alarmeer op CBC-, 3DES-, RC4- of NULL-suites.",
+     "owasp": "A04:2025", "wstg": "WSTG-CRYP-01, WSTG-CRYP-04", "asvs": "V11, V12", "mitre": "T1557, T1040",
+     "cwe": "CWE-327, CWE-326, CWE-328", "cissp": "D3", "related": [1, 2, 8],
+     "repro": "testssl.sh -P -E {t}"},
+    {"n": 4, "keys": ["auth", "cert_key", "sigalg13", "sigalg12", "hash_cert"],
+     "title": "Zwakke serversleutel of handtekeningalgoritmes", "sev_default": "Low", "kill": "Credential Access",
+     "desc": "De serverauthenticatie gebruikt een te korte sleutel, verouderde handtekeningalgoritmes "
+             "(RSA-PKCS#1 v1.5, SHA-1, SHA-224) of anonieme suites zonder authenticatie.",
+     "impact": "Zwakke authenticatie maakt het voor een aanvaller makkelijker de server te imiteren "
+               "(adversary-in-the-middle); anonieme suites bieden helemaal geen serverauthenticatie.",
+     "fix": "Gebruik RSA van minimaal 3072 bit of ECDSA P-256/P-384, onderteken met RSA-PSS of ECDSA met SHA-256+, "
+            "en verwijder anonieme suites.",
+     "config": ["Apache: SSLOpenSSLConfCmd SignatureAlgorithms "
+                "rsa_pss_rsae_sha256:rsa_pss_rsae_sha384:rsa_pss_rsae_sha512:ecdsa_secp256r1_sha256:"
+                "ecdsa_secp384r1_sha384:ed25519",
+                "nginx: ssl_conf_command SignatureAlgorithms <zelfde lijst>;"],
+     "detect": "Inventariseer certificaten en sleutellengtes (certificaatbeheer, CT-logmonitoring).",
+     "owasp": "A04:2025", "wstg": "WSTG-CRYP-01", "asvs": "V11, V12", "mitre": "T1557",
+     "cwe": "CWE-326, CWE-327, CWE-328", "cissp": "D3", "related": [5],
+     "repro": "testssl.sh -S -f {t}"},
+    {"n": 5, "keys": ["chain", "cert_valid", "ocsp", "dane"], "title": "Problemen met certificaat of keten",
+     "sev_default": "Medium", "kill": "Credential Access",
+     "desc": "Het certificaat is niet (volledig) te valideren: onvolledige of onvertrouwde keten, verlopen of "
+             "bijna verlopen, of een naam die niet past bij de host. Ook ontbrekende OCSP-stapling of DANE valt "
+             "hieronder (advies).",
+     "impact": "Clients kunnen de server niet betrouwbaar authenticeren; gebruikers raken gewend aan "
+               "certificaatwaarschuwingen, wat adversary-in-the-middle-aanvallen vergemakkelijkt.",
+     "fix": "Configureer een geldig certificaat van een vertrouwde CA met de volledige keten (zonder root), "
+            "bewaak vernieuwing en configureer OCSP-stapling waar mogelijk.",
+     "config": ["Apache: SSLCertificateFile met leaf + intermediates; SSLUseStapling on",
+                "nginx: ssl_certificate met fullchain; ssl_stapling on; ssl_stapling_verify on;"],
+     "detect": "Monitor certificaatverloop en Certificate Transparency-logs voor het domein.",
+     "owasp": "A04:2025, A02:2025", "wstg": "WSTG-CRYP-01", "asvs": "V12", "mitre": "T1557",
+     "cwe": "CWE-295, CWE-324", "cissp": "D3", "related": [4],
+     "repro": "testssl.sh -S {t}"},
+    {"n": 6, "keys": ["compression", "breach"], "title": "Compressie maakt CRIME/BREACH mogelijk",
+     "sev_default": "Low", "kill": "Credential Access",
+     "desc": "TLS-compressie of HTTP-compressie is actief op antwoorden die geheimen kunnen bevatten.",
+     "impact": "Een aanvaller die verkeer kan observeren en verzoeken kan beïnvloeden, kan via de lengte van "
+               "gecomprimeerde antwoorden geheimen zoals sessietokens of CSRF-tokens achterhalen.",
+     "fix": "Schakel TLS-compressie uit. Beperk HTTP-compressie op pagina's met geheimen, of mitigeer met "
+            "per-request gemaskeerde tokens en SameSite-cookies.",
+     "config": ["Apache: SSLCompression off", "nginx: gzip off; in locaties met gevoelige antwoorden"],
+     "detect": "Monitor op grote aantallen vergelijkbare verzoeken met variërende parameters vanaf één bron.",
+     "owasp": "A04:2025", "wstg": "WSTG-CRYP-01", "asvs": "V12", "mitre": "T1557, T1040",
+     "cwe": "CWE-200", "cissp": "D3", "related": [],
+     "repro": "testssl.sh -C -B {t}"},
+    {"n": 7, "keys": ["reneg_secure", "reneg_client", "0rtt"], "title": "Onveilige renegotiation of 0-RTT",
+     "sev_default": "Low", "kill": "Impact",
+     "desc": "De dienst staat insecure of onbeperkte client-initiated renegotiation toe, of accepteert 0-RTT "
+             "early data.",
+     "impact": "Insecure renegotiation maakt het injecteren van verzoeken mogelijk; onbeperkte renegotiation "
+               "maakt CPU-uitputting (DoS) mogelijk; 0-RTT is gevoelig voor replay-aanvallen.",
+     "fix": "Gebruik een bibliotheek met RFC 5746, schakel client-initiated renegotiation uit en zet 0-RTT uit.",
+     "config": ["nginx: ssl_early_data off;",
+                "Apache/OpenSSL: client-initiated renegotiation uitschakelen (SSL_OP_NO_RENEGOTIATION)"],
+     "detect": "Monitor op herhaalde renegotiations per verbinding en op replays van verzoeken.",
+     "owasp": "A04:2025, A02:2025", "wstg": "WSTG-CRYP-01", "asvs": "V12", "mitre": "T1499.002, T1557",
+     "cwe": "CWE-400, CWE-300, CWE-294", "cissp": "D3", "related": [],
+     "repro": "testssl.sh -R -S {t}"},
+    {"n": 8, "keys": ["lib_vulns", "ems", "minimal"], "title": "Kwetsbare of onvolledige TLS-implementatie",
+     "sev_default": "High", "kill": "Credential Access",
+     "desc": "De TLS-implementatie is kwetsbaar voor bekende aanvallen, mist beveiligingsextensies (extended "
+             "master secret, encrypt-then-MAC) of heeft onnodige functionaliteit aan (heartbeat).",
+     "impact": "Afhankelijk van de kwetsbaarheid: uitlekken van geheugen of sleutels (bijv. Heartbleed), "
+               "ontsleutelen van verkeer of het overnemen van sessies.",
+     "fix": "Update de TLS-bibliotheek en de software die TLS afhandelt naar een ondersteunde versie en schakel "
+            "onnodige functionaliteit uit.",
+     "config": [],
+     "detect": "Neem de TLS-bibliotheek op in kwetsbaarhedenbeheer; IDS-signaturen voor bekende TLS-aanvallen.",
+     "owasp": "A03:2025, A04:2025", "wstg": "WSTG-CRYP-01", "asvs": "V12", "mitre": "T1190, T1557",
+     "cwe": "CWE-1395, CWE-300", "cissp": "D3, D8", "related": [3],
+     "repro": "testssl.sh -U {t}"},
+    {"n": 9, "keys": ["pq_kx", "large_ch", "pq_256", "pq_tls13"], "title": "Niet voorbereid op quantumdreiging",
+     "sev_default": "Info", "kill": "Collection",
+     "desc": "De dienst biedt geen hybride post-quantum sleuteluitwisseling aan, verwerkt geen grote ClientHello "
+             "of mist 256-bit suites of TLS 1.3.",
+     "impact": "Versleuteld verkeer dat nu wordt opgeslagen kan later met een cryptografisch relevante "
+               "quantumcomputer worden ontsleuteld (store-now-decrypt-later).",
+     "fix": "Ondersteun TLS 1.3 met X25519MLKEM768, AES-256-GCM/ChaCha20-Poly1305 en zorg voor crypto-agility.",
+     "config": ["Apache: SSLOpenSSLConfCmd Groups X25519MLKEM768:X25519:secp256r1:secp384r1 (OpenSSL 3.5+)",
+                "nginx: ssl_ecdh_curve X25519MLKEM768:X25519:prime256v1:secp384r1; (OpenSSL 3.5+)"],
+     "detect": "Inventariseer TLS-gebruik en onderhandelde groepen.",
+     "owasp": "A04:2025", "wstg": "WSTG-CRYP-01", "asvs": "V11, V12", "mitre": "T1040",
+     "cwe": "CWE-327, CWE-326", "cissp": "D3", "related": [2],
+     "repro": "openssl s_client -connect {hp} -tls1_3 -groups X25519MLKEM768 -brief"},
+]
+GROUP_BY_N = {g["n"]: g for g in FINDING_GROUPS}
+
+# CVE's per aangetroffen situatie (patroon op titel + bewijs)
+CVE_PATTERNS = [
+    (r"TLS 1\.1 en TLS 1\.0.*aangeboden:.*TLS 1\.0", ["CVE-2011-3389"]),
+    (r"SSL 3\.0.*aangeboden:.*SSL 3\.0", ["CVE-2014-3566"]),
+    (r"SSL 3\.0.*aangeboden:.*SSL 2\.0", ["CVE-2016-0800"]),
+    (r"Alleen AEAD.*CBC-suite", ["CVE-2013-0169"]),
+    (r"Geen RC4.*3DES", ["CVE-2016-2183"]),
+    (r"Geen RC4.*RC4", ["CVE-2013-2566", "CVE-2015-2808"]),
+    (r"Geen RC4.*EXPORT", ["CVE-2015-0204"]),
+    (r"TLS-compressie", ["CVE-2012-4929"]),
+    (r"HTTP-compressie", ["CVE-2013-3587"]),
+    (r"Secure renegotiation", ["CVE-2009-3555"]),
+    (r"Client-initiated renegotiation", ["CVE-2011-1473"]),
+]
+
+
+def item_group(it):
+    key, title = it.get("ref", ""), it.get("title", "")
+    if title.startswith("Cipher suites op TLS 1.0"):
+        return 1
+    if key == "hash":
+        key = "hash_cert" if title.startswith("Hash in handtekening") else "hash_mac"
+    for g in FINDING_GROUPS:
+        if key in g["keys"]:
+            return g["n"]
+    return None
+
+
+def item_severity(it):
+    """Severity afgeleid van het NCSC-niveau en de uitbuitbaarheid."""
+    st, lv, key = it["status"], it.get("level_num"), it.get("ref", "")
+    ev, title = (it.get("evidence") or ""), it.get("title", "")
+    if st == ADVICE:
+        return "Info"
+    if st != FAIL:
+        return None
+    if it.get("sev_hint"):
+        return it["sev_hint"]
+    if lv == ONVOLDOENDE:
+        direct = (
+            (title.startswith("SSL 3.0") and "aangeboden" in ev) or key == "auth" or key == "compression"
+            or key == "reneg_secure"
+            or (key == "bulk_weak" and re.search(r"RC4|NULL|EXPORT|_DES_|DES40", ev)))
+        return "High" if direct else "Medium"
+    if lv == UIT_TE_FASEREN:
+        return "Low"
+    return {"chain": "Medium", "cert_valid": "Medium", "etm": "Medium", "downgrade": "Medium"}.get(key, "Low")
+
+
+def item_cves(it):
+    out = list(it.get("cves", []))
+    txt = f"{it.get('title', '')} {it.get('evidence', '')}"
+    for pat, cves in CVE_PATTERNS:
+        if re.search(pat, txt):
+            out += cves
+    return out
+
+
+def asset_scope(meta):
+    port = int(re.search(r":(\d+)", meta["target"]).group(1)) if re.search(r":(\d+)", meta["target"]) else 0
+    if meta.get("starttls"):
+        return f"Netwerkdienst (STARTTLS {meta['starttls']})"
+    if (meta.get("service") or "").upper().startswith("HTTP") or port in (443, 8443):
+        return "Webapplicatie"
+    return "Netwerkdienst"
+
+
+def build_report(docs, id_template="TLS-{n:02d}"):
+    """docs = lijst van *_ncsc.json-inhoud. Geeft Markdown met gekoppelde bevindingen."""
+    fid = lambda n: id_template.format(n=n)  # noqa: E731
+    anchor = lambda n: "f-" + re.sub(r"[^a-z0-9]+", "-", fid(n).lower()).strip("-")  # noqa: E731
+    found = {}       # groep -> lijst (asset, item, severity)
+    manual = {}      # vraagsleutel -> (vraag, assets)
+    assets = []
+    last = max((d["meta"].get("date", "") for d in docs), default="")
+    for d in docs:
+        meta = d["meta"]
+        asset = meta["target"].split(" ")[0]
+        assets.append((asset, asset_scope(meta), meta))
+        for it in d["items"]:
+            if it["status"] == MANUAL and it.get("question"):
+                q = manual.setdefault(it["ref"], {"title": it["title"], "assets": [], "q": it["question"],
+                                                  "ok": it.get("acceptable_answer", ""),
+                                                  "refs": it.get("references", [])})
+                q["assets"].append(asset)
+                continue
+            sev = item_severity(it)
+            g = item_group(it)
+            if sev and g:
+                found.setdefault(g, []).append((asset, it, sev))
+    present = sorted(found)
+    gsev = {g: max((s for _, _, s in found[g]), key=lambda s: SEV_ORDER[s]) for g in present}
+
+    out = ["# Bevindingen TLS-toetsing", "",
+           f"Getoetst aan: {GUIDELINE}  ", f"Gegenereerd: {last} · ncsc_tls_check.py v{__version__}", ""]
+    out += ["## Getoetste assets", "", "| Asset | Scope | Bevindingen |", "| --- | --- | --- |"]
+    for asset, scope, _ in assets:
+        ids = [fid(g) for g in present if any(a == asset for a, _, _ in found[g])]
+        out.append(f"| {asset} | {scope} | {', '.join(ids) or 'geen'} |")
+    out += ["", "## Overzicht", ""]
+    if not present:
+        out.append("Geen noemenswaardige bevindingen.")
+    else:
+        out += ["| ID | Bevinding | Severity | Assets | Gekoppeld aan |", "| --- | --- | --- | --- | --- |"]
+        for g in sorted(present, key=lambda g: (-SEV_ORDER[gsev[g]], g)):
+            rel = [fid(r) for r in GROUP_BY_N[g]["related"] if r in found]
+            n_assets = len({a for a, _, _ in found[g]})
+            out.append(f"| [{fid(g)}](#{anchor(g)}) | {GROUP_BY_N[g]['title']} | {gsev[g]} | "
+                       f"{n_assets} | {', '.join(rel) or '-'} |")
+        # herstelvolgorde per asset
+        out += ["", "## Herstel per asset", "",
+                "Op volgorde van severity. Gekoppelde bevindingen los je vaak met één configuratiewijziging op.", ""]
+        for asset, scope, _ in assets:
+            mine = sorted({g for g in present if any(a == asset for a, _, _ in found[g])},
+                          key=lambda g: (-SEV_ORDER[max((s for a, _, s in found[g] if a == asset),
+                                                        key=lambda s: SEV_ORDER[s])], g))
+            if mine:
+                out.append(f"- **{asset}**: " + " → ".join(
+                    f"{fid(g)} ({max((s for a, _, s in found[g] if a == asset), key=lambda s: SEV_ORDER[s])})"
+                    for g in mine))
+
+    for g in sorted(present, key=lambda g: (-SEV_ORDER[gsev[g]], g)):
+        G = GROUP_BY_N[g]
+        rows = found[g]
+        g_assets = sorted({a for a, _, _ in rows})
+        scopes = sorted({s for a, s, _ in assets if a in g_assets})
+        cves = sorted({c for _, it, _ in rows for c in item_cves(it)})
+        rel = [fid(r) for r in G["related"] if r in found] + cves
+        refs, seen = [], set()
+        for _, it, _ in rows:
+            for rf in it.get("references", []):
+                k = (rf["passage"], rf["pages"])
+                if k not in seen:
+                    seen.add(k)
+                    refs.append(rf)
+        advice = []
+        for _, it, _ in rows:
+            if it.get("advice") and it["advice"] not in advice:
+                advice.append(it["advice"])
+        out += ["", f'<a id="{anchor(g)}"></a>', "", f"## {fid(g)} — {G['title']}", "",
+                f"**Scope**: {', '.join(scopes)}", "",
+                f"**Category**: {COMMON['category']}", "",
+                f"**Kill chain phase**: {G['kill']}", "",
+                f"**Severity default**: {G['sev_default']}", "",
+                f"**Severity**: {gsev[g]} (afgeleid van het zwakste NCSC-niveau en de uitbuitbaarheid)", "",
+                f"**Description**: {G['desc']}", "",
+                f"**Impact**: {G['impact']}", "",
+                f"**Test approach**: {COMMON['test']} Reproductiecommando per asset: zie Evidence.", "",
+                f"**Remediation**: {G['fix']}" + (" " + " ".join(advice) if advice else ""), ""]
+        for c in G["config"]:
+            out.append(f"- `{c}`")
+        if G["config"]:
+            out.append("")
+        out += [f"**Detection note**: {G['detect']}", "",
+                f"**OWASP Top10 2025**: {G['owasp']}", "",
+                f"**WSTG**: {G['wstg']}", "",
+                f"**ASVS 5.0**: {G['asvs']}", "",
+                f"**MITRE ATTACK**: {G['mitre']}", "",
+                f"**CWE**: {G['cwe']}", "",
+                f"**PayloadsAllTheThings**: {COMMON['patt']}", "",
+                f"**OSCP plus**: {COMMON['oscp']}", "",
+                f"**CISSP domain**: {G['cissp']}", "",
+                f"**Related IDs**: {', '.join(rel) or '-'}", "",
+                f"**Last updated**: {last[:10]}", "",
+                "**Affected assets**: " + ", ".join(g_assets), "",
+                "**Evidence**:", ""]
+        for asset in g_assets:
+            meta = next(m for a, _, m in assets if a == asset)
+            t = (f"-t {meta['starttls']} " if meta.get("starttls") else "") + asset  # testssl: doel als laatste
+            hp = asset + (f" -starttls {meta['starttls']}" if meta.get("starttls") else "")
+            out.append(f"- **{asset}** — reproductie: `{G['repro'].format(t=t, hp=hp)}`")
+            for a, it, sev in rows:
+                if a != asset:
+                    continue
+                ev = (it.get("evidence") or "").replace("|", "/")
+                if len(ev) > 350:
+                    ev = ev[:347] + "..."
+                lvl = f", NCSC: {it['level']}" if it.get("level") and it["level"] != "-" else ""
+                out.append(f"    - {it['title']} ({sev}{lvl}): {ev}")
+        out += ["", "**NCSC-referenties**:", ""]
+        for rf in refs:
+            out.append(f"- {rf['passage']} (p. {rf['pages']}): {rf['rule']}")
+        qs = [it.get("question") for _, it, _ in rows if it.get("question")]
+        if qs:
+            out += ["", "**Vraag aan beheerder**:", ""]
+            for q in dict.fromkeys(qs):
+                out.append("- " + q.replace("\n", " "))
+
+    if manual:
+        link = {"resumption": 7, "lib": 8, "prng": 8, "proxy": 5, "certmgmt": 5, "pq_risk": 9, "pq_agility": 9}
+        out += ["", "## Bijlage: openstaande navraagpunten", "",
+                "Niet extern meetbaar. Het antwoord van de beheerder bepaalt of hier een bevinding uit volgt.", "",
+                "| Onderwerp | Assets | Gekoppeld aan | Richtlijn |", "| --- | --- | --- | --- |"]
+        for key, q in manual.items():
+            gl = fid(link[key]) if link.get(key) in found else "-"
+            rf = "; ".join(f"{r['passage']} (p. {r['pages']})" for r in q["refs"])
+            out.append(f"| {q['title']} | {', '.join(sorted(set(q['assets'])))} | {gl} | {rf} |")
+        out.append("")
+        for key, q in manual.items():
+            text = q["q"]
+            if len(set(q["assets"])) > 1 and key in QUESTIONS:  # algemeen geformuleerd voor meerdere assets
+                text = QUESTIONS[key][0].format(target="de genoemde diensten", host="elke genoemde host",
+                                                title=q["title"])
+            out += [f"**{q['title']}** ({', '.join(sorted(set(q['assets'])))})  ",
+                    text.replace("\n", "  \n") + "  ", f"*Voldoende als:* {q['ok']}", ""]
+    out.append("")
+    return "\n".join(out)
+
+
+def write_findings_report(paths, outdir, id_template):
+    docs = []
+    for p in paths:
+        with open(p, encoding="utf-8") as fh:
+            docs.append(json.load(fh))
+    docs.sort(key=lambda d: d["meta"]["target"])
+    path = os.path.join(outdir, "bevindingen.md")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(build_report(docs, id_template))
+    print(f"[+] Rapportbevindingen: {path}", file=sys.stderr)
+    return path
 
 
 COLORS = {PASS: "\033[32m", FAIL: "\033[31m", ADVICE: "\033[33m", MANUAL: "\033[36m", UNKNOWN: "\033[35m", INFO: "\033[37m"}
@@ -1417,6 +1787,7 @@ def scan_target(target, args, outdir, starttls=None, discovery=None):
     fatal = [it for it in f.items if it.get("severity") == "FATAL"]
     if fatal and not any(f.has(p) for p in ("TLS1_2", "TLS1_3", "TLS1")):
         raise ScanError("testssl.sh: " + "; ".join(it.get("finding", "") for it in fatal)[:300])
+    meta["service"] = f.finding("service", "") or ""
     if not meta.get("ip"):
         for it in f.items:
             if it.get("ip"):
@@ -1455,6 +1826,7 @@ def scan_target(target, args, outdir, starttls=None, discovery=None):
     print_console(cl, meta, color=sys.stdout.isatty() and not args.no_color)
     print(f"\n[+] Checklist: {base}_ncsc.md\n[+] JSON:      {base}_ncsc.json", file=sys.stderr)
     cl.md_path = base + "_ncsc.md"
+    cl.json_path = base + "_ncsc.json"
     return cl
 
 
@@ -1481,8 +1853,22 @@ def main():
     d.add_argument("--nmap-args", default="-T4", help="extra nmap-argumenten (standaard: -T4)")
     d.add_argument("--nmap-xml", help="bestaande nmap -oX uitvoer gebruiken in plaats van opnieuw scannen")
     d.add_argument("--nmap-timeout", type=int, default=7200, help="max. seconden voor nmap (standaard 7200)")
+    r = ap.add_argument_group("rapportage")
+    r.add_argument("--id-template", default=os.environ.get("NCSC_ID_TEMPLATE", "TLS-{n:02d}"),
+                   help="ID-schema voor rapportbevindingen; {n} = vast groepsnummer 1-9 "
+                        "(standaard TLS-{n:02d}, bv. 'AV-WEB-20.{n}')")
+    r.add_argument("--report-from", metavar="MAP",
+                   help="maak alleen het gecombineerde rapport uit alle *_ncsc.json in MAP (geen scan)")
     ap.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = ap.parse_args()
+
+    if args.report_from:
+        import glob
+        paths = sorted(glob.glob(os.path.join(args.report_from, "*_ncsc.json")))
+        if not paths:
+            sys.exit(f"geen *_ncsc.json gevonden in {args.report_from}")
+        write_findings_report(paths, args.outdir if args.outdir != "." else args.report_from, args.id_template)
+        sys.exit(0)
 
     targets = list(args.targets)
     if args.file:
@@ -1530,7 +1916,7 @@ def main():
         jobs = [(t, None, None, None) for t in targets]
 
     # ---- toetsen
-    summary = []
+    summary, json_paths = [], []
     for t, stls, disc, svc in jobs:
         try:
             cl = scan_target(t, args, args.outdir, starttls=stls, discovery=disc)
@@ -1541,11 +1927,14 @@ def main():
         cnt = {s: sum(1 for it in cl.items if it["status"] == s) for s in (FAIL, ADVICE, MANUAL, UNKNOWN)}
         worst_lv = worst([it.get("level_num") for it in cl.items if it["status"] == FAIL])
         worst_txt = LEVEL_NAME[worst_lv] if worst_lv else ("geen NCSC-niveau (bv. certificaat)" if cnt[FAIL] else "-")
+        json_paths.append(cl.json_path)
         summary.append({"target": t, "starttls": stls, "counts": cnt, "worst": worst_txt,
                         "md": os.path.basename(cl.md_path), "svc": svc})
 
     if len(summary) > 1 or (summary and summary[0].get("error")) or args.discover or args.nmap_xml:
         write_overview(summary, args.outdir)
+    if json_paths:
+        write_findings_report(json_paths, args.outdir, args.id_template)
     sys.exit(1 if any(s.get("error") or s["counts"][FAIL] for s in summary) else 0)
 
 

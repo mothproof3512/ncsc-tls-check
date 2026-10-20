@@ -9,5 +9,6 @@ __pycache__/
 *_testssl.log
 *_nmap.xml
 overzicht.md
+bevindingen.md
 resultaten/
 results/

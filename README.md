@@ -47,6 +47,7 @@ Het script draait testssl.sh met `-p -s -f -P -S -h -U` (geen client-simulaties)
 | `<host>_<poort>_ncsc.json` | Dezelfde resultaten machineleesbaar, inclusief het niveau per cipher suite |
 | `<host>_<poort>_testssl.json/.log` | De ruwe testssl-uitvoer als bewijs |
 | `<host>_nmap.xml` | De nmap-uitvoer (bij `--discover`) |
+| `bevindingen.md` | Gecombineerd rapport met gekoppelde bevindingen in het sjabloonformaat |
 | `overzicht.md` | Eén regel per dienst: aantal bevindingen, zwakste niveau, link naar de checklist (bij meerdere diensten of `--discover`) |
 
 Het script stopt met exitcode 1 zodra er minstens één bevinding is, zodat je het in een pipeline kunt gebruiken.
@@ -78,6 +79,49 @@ Niet alles is van buitenaf te meten. Voor elk NAVRAAG-punt geeft het script de p
 Bevindingen op niveau *uit te faseren* krijgen ook een vraag: naar het uitfaseerplan uit §3.2.
 
 Onderaan elke checklist staat de **Vragenlijst voor de beheerder**: genummerde vragen met meetgegevens, verwijzing naar de richtlijn, criterium en een antwoordveld. Die kun je zo doorsturen.
+
+## Rapportbevindingen
+
+Elke run schrijft naast de checklists een gecombineerd rapport `bevindingen.md` voor alle getoetste assets. Gerelateerde checklistpunten worden daarin samengevoegd tot een beperkt aantal bevindingen met vaste nummers:
+
+| n | Bevinding | Severity default |
+| --- | --- | --- |
+| 1 | Verouderde TLS/SSL-protocolversies ondersteund | Medium |
+| 2 | Zwakke sleuteluitwisseling of geen forward secrecy | Medium |
+| 3 | Zwakke of verouderde cipher suites | Medium |
+| 4 | Zwakke serversleutel of handtekeningalgoritmes | Low |
+| 5 | Problemen met certificaat of keten | Medium |
+| 6 | Compressie maakt CRIME/BREACH mogelijk | Low |
+| 7 | Onveilige renegotiation of 0-RTT | Low |
+| 8 | Kwetsbare of onvolledige TLS-implementatie | High |
+| 9 | Niet voorbereid op quantumdreiging | Info |
+
+**Inhoud per bevinding.** Elke bevinding heeft de velden van het sjabloon (Scope t/m Last updated). Daarna volgen:
+- Affected assets;
+- Evidence per asset, met reproductiecommando;
+- NCSC-referenties met paginanummer;
+- eventueel een vraag aan de beheerder.
+
+**Koppeling.** Related IDs verwijst naar samenhangende bevindingen en naar CVE's. Het overzicht bovenaan toont severity en koppelingen. "Herstel per asset" geeft per asset de volgorde van oplossen.
+
+**Severity** volgt uit het NCSC-niveau:
+
+| NCSC-niveau | Severity |
+| --- | --- |
+| onvoldoende, direct uitbuitbaar (SSL, anonieme suites, RC4/NULL/EXPORT, compressie, insecure renegotiation) | High |
+| onvoldoende, overig | Medium |
+| uit te faseren | Low |
+| advies | Info |
+
+Bekende kwetsbaarheden volgen de severity van testssl.
+
+**ID's.** Het ID-schema stel je in met `--id-template`. `{n}` is het vaste groepsnummer, zodat dezelfde soort bevinding in elk rapport hetzelfde ID houdt:
+
+```bash
+./ncsc_tls_check.py example.com --discover --id-template 'AV-WEB-20.{n}'
+./ncsc_tls_check.py --report-from resultaten/ --id-template 'AV-WEB-20.{n}'   # rapport uit eerdere runs
+export NCSC_ID_TEMPLATE='AV-WEB-20.{n}'                                        # vaste standaard
+```
 
 ## Statussen
 
